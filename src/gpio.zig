@@ -1,0 +1,20 @@
+pub const MMIO_BASE: [*]volatile u32 = @intToPtr([*]u32, 0x3F000000);
+
+pub const GPFSEL0: *volatile u32 = @ptrCast(*u32,MMIO_BASE + 0x00200000);
+pub const GPFSEL1: *volatile u32 = @ptrCast(*u32,MMIO_BASE + 0x00200004);
+pub const GPFSEL2: *volatile u32 = MMIO_BASE + 0x00200008;
+pub const GPFSEL3: *volatile u32 = MMIO_BASE + 0x0020000C;
+pub const GPFSEL4: *volatile u32 = @ptrCast(*u32,MMIO_BASE + 0x00200010);
+pub const GPFSEL5: *volatile u32 = @ptrCast(*u32,MMIO_BASE + 0x00200014);
+pub const GPSET0: *volatile u32 = MMIO_BASE + 0x0020001C;
+pub const GPSET1: *volatile u32 = MMIO_BASE + 0x00200020;
+pub const GPCLR0: *volatile u32 = MMIO_BASE + 0x00200028;
+pub const GPLEV0: *volatile u32 = MMIO_BASE + 0x00200034;
+pub const GPLEV1: *volatile u32 = MMIO_BASE + 0x00200038;
+pub const GPEDS0: *volatile u32 = MMIO_BASE + 0x00200040;
+pub const GPEDS1: *volatile u32 = MMIO_BASE + 0x00200044;
+pub const GPHEN0: *volatile u32 = MMIO_BASE + 0x00200064;
+pub const GPHEN1: *volatile u32 = @ptrCast(*u32,MMIO_BASE + 0x00200068);
+pub const GPPUD: *volatile u32 = @ptrCast(*u32,MMIO_BASE + 0x00200094);
+pub const GPPUDCLK0: *volatile u32 = @ptrCast(*u32,MMIO_BASE + 0x00200098);
+pub const GPPUDCLK1: *volatile u32 = @ptrCast(*u32,MMIO_BASE + 0x0020009C);

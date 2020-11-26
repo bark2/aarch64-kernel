@@ -1,0 +1,8 @@
+.git/
+zig-cache/
+pdf/
+MMU-Examples/
+kernel.img
+rd.o
+ramdisk
+zig
