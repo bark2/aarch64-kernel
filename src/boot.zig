@@ -59,7 +59,7 @@ export fn boot_main() linksection(".text.boot_main") void {
     // log("CurrentEL {} exception level {}\n", .{ currentEL, currentEL >> 2 & 0x3 });
 
     var archive = @ptrCast([*]u8, &_binary_ramdisk_start);
-    // initrd.list(archive);
+    initrd.list(archive);
 
     var hdr: *elf.Elf = undefined;
     _ = initrd.lookup(archive, "zig-cache/kernel", &hdr);

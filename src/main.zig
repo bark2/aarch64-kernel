@@ -97,7 +97,7 @@ comptime {
         \\// ------------------------------------
         \\ // Set boot stack
         \\ ldr x0, =boot_stack
-        \\ add x0, x0, 0x8000
+        \\ add x0, x0, #8*(1 << 12)
         \\ mov sp, x0
         \\// ------------------------------------
         \\ // Jump to kernel main
@@ -123,9 +123,7 @@ export fn kern_main() callconv(.Naked) void {
         panic("Error in critical code\n", null);
     };
 
-    // while (true) uart.write_byte(uart.read_byte());
-    var p = proc.create(@intToPtr(*u8, 1)) catch panic("Out of Memory allocating proc\n", null);
-    log("proc: {}\n", .{p.*});
-
-    p.run();
+    // var p = proc.create(@intToPtr(*u8, 1)) catch panic("Out of Memory allocating proc\n", null);
+    // log("proc: {}, {}\n", .{ @ptrCast(*u8, p), p.* });
+    proc.procs.?.run();
 }

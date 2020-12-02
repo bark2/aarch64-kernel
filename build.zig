@@ -12,9 +12,17 @@ pub fn build(b: *Builder) !void {
         .cpu_model = .{ .explicit = &std.Target.aarch64.cpu.cortex_a53 },
     };
 
+    const sd = b.addObject("sd", "extern/sd.c");
+    sd.addObjectFile("extern/delays.c");
+    sd.setOutputDir("zig-cache");
+    sd.setBuildMode(mode);
+    sd.setTarget(arch);
+    b.default_step.dependOn(&sd.step);
+
     const kernel = b.addExecutable("kernel", "src/main.zig");
     kernel.addAssemblyFile("src/set_ttbr0_el1_and_t0sz.s");
     kernel.addAssemblyFile("src/exception.s");
+    kernel.addObjectFile("zig-cache/sd.o");
     kernel.setOutputDir("zig-cache");
     kernel.setBuildMode(mode);
     kernel.setTarget(arch);
@@ -28,8 +36,9 @@ pub fn build(b: *Builder) !void {
     user_run.setOutputDir("zig-cache");
     user_run.setBuildMode(mode);
     user_run.setTarget(arch);
-    // user_run.setLinkerScriptPath("src/user.debug.ld");
+    user_run.setLinkerScriptPath("src/user.debug.ld");
     user.dependOn(&user_run.step);
+    // b.default_step.dependOn(&user_run.step);
 
     const elf = b.step("elf", "link and compile the bootloader with kernel ramdisk");
     const run_elf = b.addExecutable("kernel.elf", "src/boot.zig");

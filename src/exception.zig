@@ -47,12 +47,24 @@ const exception_names = init: {
     break :init array;
 };
 
+// If a user gets exception, switch to kernel stack then push user state and handle,
+// the user state is on the kernel's stack.
+// A kernel thread which yields will use a function call, which as defined by the abi
+// will save the current caller saved registers on the stack,
+// and the new process state will be loaded.
+// Can a system with more users than cores can function correcly?
+// In xv6 for example, every user have a coresponding kernel thread.
+// Exception results in a exception frame being created on the kernel stack(and because
+// each user process has a kernel thread is is OK).
+
 pub export fn handler(exception: usize, ef: *ExceptionFrame) callconv(.Fastcall) noreturn {
     var stack_or_proc_ef = ef;
+    // log("proc: {}, {}\n", .{ @ptrCast(*u8, proc.cur_proc.data.?), proc.cur_proc.?.* });
     if (exception == @enumToInt(Exception.SYNC_EL0_64)) {
         proc.cur_proc.?.ef = stack_or_proc_ef.*;
         stack_or_proc_ef = &proc.cur_proc.?.ef;
     }
+    // log("proc: {}\n", .{proc.cur_proc.?.*});
 
     dispatch(@intToEnum(Exception, @truncate(u4, exception)), stack_or_proc_ef);
     if (proc.cur_proc) |cur_proc| {
@@ -65,7 +77,7 @@ pub export fn handler(exception: usize, ef: *ExceptionFrame) callconv(.Fastcall)
 fn dispatch(exception: Exception, ef: *ExceptionFrame) void {
     log("\n{}\n", .{exception_names[@enumToInt(exception)]});
     const currentEL = asm volatile ("mrs x0, CurrentEL"
-        : [ret] "={x0}" (-> usize)
+        : [ret] "=r" (-> usize)
     );
     log("EL{}\n", .{currentEL >> 2 & 0x3});
     const esr_el1 = asm ("mrs %[esr_el1], esr_el1"
@@ -96,13 +108,12 @@ fn dispatch(exception: Exception, ef: *ExceptionFrame) void {
             // pop_ef(0);
         },
         Exception.SYNC_EL0_64 => {
-            if ((arch.esr_el1() >> ESR_ELx_EC_SHIFT) == ESR_ELx_EC_SVC64) { // caused by an svc inst
+            if ((esr_el1 >> ESR_ELx_EC_SHIFT) == ESR_ELx_EC_SVC64) { // caused by an svc inst
                 // x8 for syscall number, x0-x7 for arguments, x0 for return value
-                log("{}", .{ef.xs[8]});
-                for (ef.xs[0..8]) |x, i|
-                    log(", arg{}: {}", .{ i, x });
-                log("\n", .{});
-
+                // log("{}", .{ef.xs[8]});
+                // for (ef.xs[0..8]) |x, i|
+                // log(", arg{}: {}", .{ i, x });
+                // log("\n", .{});
                 ef.xs[0] = syscall.syscall(ef.xs[8], ef.xs[0..8].*);
                 return;
             }
@@ -116,10 +127,11 @@ fn dispatch(exception: Exception, ef: *ExceptionFrame) void {
     }
 }
 
-export var REGISTERS_SIZE: u12 = 272;
+// export var REGISTERS_SIZE: u12 = 272;
+
 // push registers on to the kernel stack
+//   el: indicates which exception level an exception is taken from
 pub inline fn push_ef(comptime el: usize, ef: *ExceptionFrame) noreturn {
-    // asm volatile ()
     asm volatile (
         \\  sub	sp, sp, #272
         \\  stp	x0, x1, [sp, #16 * 0]
@@ -158,37 +170,44 @@ pub inline fn push_ef(comptime el: usize, ef: *ExceptionFrame) noreturn {
     );
 }
 
+// el: indicates which exception level an exception is taken from
 pub inline fn pop_ef(comptime el: usize, ef: *ExceptionFrame) noreturn {
-    asm volatile (
-        \\  ldp	x22, x23, [sp, #16 * 16]
-        \\  ldp	x30, x21, [sp, #16 * 15]
-        :
-        : [ef] "{sp}" (ef)
-    );
-    if (el == 0)
-        asm volatile ("msr sp_el0, x21");
-    asm volatile (
-        \\  msr	elr_el1, x22			
-        \\  msr	spsr_el1, x23
-        \\  ldp	x0, x1, [sp, #16 * 0]
-        \\  ldp	x2, x3, [sp, #16 * 1]
-        \\  ldp	x4, x5, [sp, #16 * 2]
-        \\  ldp	x6, x7, [sp, #16 * 3]
-        \\  ldp	x8, x9, [sp, #16 * 4]
-        \\  ldp	x10, x11, [sp, #16 * 5]
-        \\  ldp	x12, x13, [sp, #16 * 6]
-        \\  ldp	x14, x15, [sp, #16 * 7]
-        \\  ldp	x16, x17, [sp, #16 * 8]
-        \\  ldp	x18, x19, [sp, #16 * 9]
-        \\  ldp	x20, x21, [sp, #16 * 10]
-        \\  ldp	x22, x23, [sp, #16 * 11]
-        \\  ldp	x24, x25, [sp, #16 * 12]
-        \\  ldp	x26, x27, [sp, #16 * 13]
-        \\  ldp	x28, x29, [sp, #16 * 14]
-        \\  // add	sp, sp, #272		
-        \\  eret
-        :
-        : [ef] "{sp}" (ef)
-    );
+    if (el == 0) {
+        asm volatile (
+            \\  ldp	x22, x23, [sp, #16 * 16]
+            \\  ldp	x30, x21, [sp, #16 * 15]
+            \\  msr     sp_el0, x21
+            \\  msr	elr_el1, x22			
+            \\  msr	spsr_el1, x23
+            \\  ldp	x0, x1, [sp, #16 * 0]
+            \\  ldp	x2, x3, [sp, #16 * 1]
+            \\  ldp	x4, x5, [sp, #16 * 2]
+            \\  ldp	x6, x7, [sp, #16 * 3]
+            \\  ldp	x8, x9, [sp, #16 * 4]
+            \\  ldp	x10, x11, [sp, #16 * 5]
+            \\  ldp	x12, x13, [sp, #16 * 6]
+            \\  ldp	x14, x15, [sp, #16 * 7]
+            \\  ldp	x16, x17, [sp, #16 * 8]
+            \\  ldp	x18, x19, [sp, #16 * 9]
+            \\  ldp	x20, x21, [sp, #16 * 10]
+            \\  ldp	x22, x23, [sp, #16 * 11]
+            \\  ldp	x24, x25, [sp, #16 * 12]
+            \\  ldp	x26, x27, [sp, #16 * 13]
+            \\  ldp	x28, x29, [sp, #16 * 14]
+            \\  add	sp, sp, #272
+            \\  ldr x0, =boot_stack
+            \\  add x0, x0, #8*(1 << 12)
+            \\  mov sp, x0
+            \\  eret
+            :
+            : [ef] "{sp}" (ef)
+            : "memory"
+        );
+    }
     unreachable;
+}
+
+test "pop_ef" {
+    std.debug.warn("\n", .{});
+    std.debug.warn("{}\n", .{@sizeOf(ExceptionFrame)});
 }

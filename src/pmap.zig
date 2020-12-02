@@ -170,6 +170,8 @@ fn pages_init() void {
             continue;
         }
 
+        // if (i % (16 * 16) == 0)
+        // log("{}\n", .{page2kva(&pages[i])});
         pages[i].ref_count = 0;
         pages[i].next = page_free_list;
         page_free_list = &pages[i];
@@ -193,9 +195,9 @@ pub fn page_alloc(alloc_zero: bool) Error!*PageInfo {
         var next_free_page = page_free_list_.*;
         page_free_list = page_free_list_.*.next;
         next_free_page.next = null;
+        // log("page_alloc: {}\n", .{page2kva(next_free_page)});
         if (alloc_zero)
             @memset(@ptrCast([*]u8, page2kva(next_free_page)), 0, page_size);
-        // log("page_alloc: next_free: {}, page2kva(next_free): {}\n", .{ next_free_page, page2kva(next_free_page) });
         return next_free_page;
     }
 
@@ -388,7 +390,10 @@ pub export var boot_tt_l1: Tt align(page_size) = init: {
     break :init tt;
 };
 
-export var boot_stack: [8 * page_size]u8 = undefined;
+export var boot_stack: [8 * page_size]u8 align(page_size) = undefined;
+pub fn boot_stack_top() usize {
+    return @ptrToInt(&boot_stack) + boot_stack.len;
+}
 
 // Map the physical page 'pp' at virtual address 'va'.
 // The permissions (the low 12 bits) of the page table entry
