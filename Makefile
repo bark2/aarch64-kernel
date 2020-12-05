@@ -29,7 +29,7 @@ clean:
 	rm kernel.elf rd.o zig-cache/*.o zig-cache/kernel* zig-cache/user* >/dev/null 2>/dev/null || true
 
 run: all
-	qemu-system-aarch64 -M raspi3 -kernel kernel.img -serial null -serial stdio -display none -sd sd.img 
+	qemu-system-aarch64 -M raspi3 -kernel kernel.img -serial null -serial stdio -display none -drive file=sd.img,if=sd,format=raw 
 
 debug: all
-	qemu-system-aarch64 -M raspi3 -kernel kernel.img -serial null -serial stdio -display none -sd sd.img -S -s
+	qemu-system-aarch64 -M raspi3 -kernel kernel.img -serial null -serial stdio -display none -drive file=sd.img,if=sd,format=raw -S -s
