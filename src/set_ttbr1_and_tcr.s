@@ -1,12 +1,12 @@
-.type set_ttbr0_el1_and_t0sz, @function
-.global set_ttbr0_el1_and_t0sz
+.type set_ttbr1_and_tcr, @function
+.global set_ttbr1_and_tcr
 
 // TODO: rename file and function
 
 // Arguments:
 //	ttbr0_el1, tcr_el1, kern_base
 //
-set_ttbr0_el1_and_t0sz:
+set_ttbr1_and_tcr:
 	// jump to physical address
 	ldr x3, =phys
 	sub x3, x3, x2
@@ -24,7 +24,7 @@ phys:	// disable MMU
 	// set new translation table
 	sub x0, x0, x2
         msr ttbr1_el1, x0
-        msr ttbr0_el1, x0
+        ;; msr ttbr0_el1, x0
         isb
 	// flush tlb
         tlbi     vmalle1
