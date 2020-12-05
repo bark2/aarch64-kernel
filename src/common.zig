@@ -4,7 +4,7 @@ const log = uart.log;
 const arch = @import("arch.zig");
 const exception = @import("exception.zig");
 
-pub const Error = error{OutOfMemory,SdTimeout};
+pub const Error = error{OutOfMemory,SdError,SdTimeout};
 
 
 pub fn panic(message: []const u8, trace: ?*builtin.StackTrace) noreturn {
