@@ -86,15 +86,33 @@ comptime {
         \\ MSR SPSel, #1                  // Handler will switch to SP_ELn
         \\// ------------------------------------
         \\ // enable MMU
+        \\ // set mair
+        \\ mov x0, #0x44
+        \\ msr mair_el1, x0
+        \\ // set tcr_el1
+        \\ // mov x0, #0x80200020
+        \\ mov x0, #0x80
+        \\ lsl x0, x0, #8
+        \\ orr x0, x0, #0x20
+        \\ lsl x0, x0, #16
+        \\ orr x0, x0, #0x20
+        \\ msr tcr_el1, x0
+        \\ // set new translation table
         \\ ldr x0, =boot_tt_l1
-        \\ // mov x1, #0x80200020
-        \\ mov x1, #0x80
-        \\ lsl x1, x1, #8
-        \\ orr x1, x1, #0x20
-        \\ lsl x1, x1, #16
-        \\ orr x1, x1, #0x20
-        \\ mov x2, #(0xffffffff << 32) // kern_base
-        \\ bl set_ttbr0_el1_and_t0sz // Return address saved in x30
+        \\ mov x1, #(0xffffffff << 32) // kern_base
+        \\ sub x0, x0, x1
+        \\ msr ttbr1_el1, x0
+        \\ msr ttbr0_el1, x0
+        \\ isb
+        \\ // flush tlb
+        \\ tlbi     vmalle1
+        \\ dsb      sy
+        \\ isb
+        \\ // renable MMU
+        \\ mrs x0, sctlr_el1
+        \\ orr x0, x0, #(1 << 0)
+        \\ msr sctlr_el1, x0
+        \\ isb
         \\// ------------------------------------
         \\ // Set boot stack
         \\ ldr x0, =boot_stack
