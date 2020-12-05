@@ -57,7 +57,7 @@ const exception_names = init: {
 // Exception results in a exception frame being created on the kernel stack(and because
 // each user process has a kernel thread is is OK).
 
-pub export fn handler(exception: usize, ef: *ExceptionFrame) callconv(.Fastcall) noreturn {
+pub export fn handler(exception: usize, ef: *ExceptionFrame) noreturn {
     var stack_or_proc_ef = ef;
     // log("proc: {}, {}\n", .{ @ptrCast(*u8, proc.cur_proc.data.?), proc.cur_proc.?.* });
     if (exception == @enumToInt(Exception.SYNC_EL0_64)) {

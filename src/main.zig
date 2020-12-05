@@ -8,6 +8,7 @@ const pmap = @import("pmap.zig");
 const proc = @import("proc.zig");
 const uart = @import("uart.zig");
 const log = uart.log;
+const sd = @import("sd.zig");
 
 // linker filled globals
 extern var __bss_start: u8;
@@ -110,9 +111,19 @@ comptime {
     );
 }
 
-inline fn init() Error!void {
+inline fn init() !void {
     uart.init();
     try pmap.init();
+    switch (sd.init()) {
+        sd.SD_OK => {},
+        sd.SD_ERROR => {
+            return Error.SdError;
+        },
+        sd.SD_TIMEOUT => {
+            return Error.SdTimeout;
+        },
+        else => unreachable,
+    }
     try proc.init();
 }
 
@@ -122,6 +133,7 @@ export fn kern_main() callconv(.Naked) void {
     init() catch {
         panic("Error in critical code\n", null);
     };
+    // log("hello world!\n", .{});
 
     // var p = proc.create(@intToPtr(*u8, 1)) catch panic("Out of Memory allocating proc\n", null);
     // log("proc: {}, {}\n", .{ @ptrCast(*u8, p), p.* });

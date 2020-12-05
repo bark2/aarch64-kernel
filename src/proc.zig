@@ -9,14 +9,7 @@ const e = @import("elf.zig");
 const log = uart.log;
 usingnamespace @import("common.zig");
 const Allocator = std.mem.Allocator;
-
-// read a block(512 bytes) from sd card and return the number of bytes read
-// returns 0 on error.
-pub extern fn sd_readblock(lba: c_uint, buffer: [*c]u8, num: c_uint) c_int;
-pub extern fn sd_init() c_void;
-pub const SD_OK = 0;
-pub const SD_TIMEOUT = -1;
-pub const SD_ERROR = -2;
+const sd = @import("sd.zig");
 
 pub const ProcState = enum {
     RUNNING,
@@ -73,7 +66,7 @@ const Proc = struct {
                 .lr = 0,
                 .sp = pmap.phys_addr(sp),
                 // .elr = pmap.phys_addr(@ptrToInt(user.main)),
-                .elr = 0,
+                .elr = 0, // TODO: set to entry of user code
                 .spsr = spsr,
             },
             .state = ProcState.RUNNABLE,
@@ -115,30 +108,11 @@ const Proc = struct {
     }
 
     pub fn load_elf(self: *Self, elf: *u8) !void {
-        // var archive = @ptrCast([*]u8, &_binary_ramdisk_start);
-
-        // var hdr: *elf.Elf = undefined;
-        // _ = initrd.lookup(archive, "zig-cache/kernel", &hdr);
-        // if (hdr.magic != elf.ELF_MAGIC)
-        //     hlt();
-
-        // var entry: usize = undefined;
-        // var pheaders = @intToPtr([*]elf.Proghdr, @ptrToInt(hdr) + hdr.phoff)[0..hdr.phnum];
-        // for (pheaders) |*ph, item| {
-        //     if (ph.type == 0x6474e551) continue; // skip GNU_STACK program header
-
-        //     // pa is the load address of this segment
-        //     // offset is the offset of the segment in the file image
-        //     // log("{x}\n", .{ph});
-        //     // @memcpy(@intToPtr([*]u8, ph.pa), @ptrCast([*]u8, hdr) + ph.offset, ph.memsz);
-        //     memmove(ph.pa, @ptrToInt(hdr) + ph.offset, ph.memsz);
-        // }
-
         // @intToPtr(fn () noreturn, hdr.entry - @import("pmap.zig").kern_base)();
         var buf: [512]u8 = undefined;
-        const bytes_read = sd_readblock(0, &buf, 1);
-        if (bytes_read == 0)
-            return Error.SdTimeout;
+        const bytes_read = sd.readblock(0, &buf, 1);
+        // if (bytes_read == 0)
+        // return Error.SdTimeout;
     }
 
     pub fn run(self: *Self) noreturn {
@@ -194,7 +168,6 @@ var fixed: std.heap.FixedBufferAllocator = undefined;
 var allocator: *Allocator = undefined;
 
 pub fn init() Error!void {
-    log("proc.init()\n", .{});
     var page = try pmap.page_alloc(true); // Should not be freed thus ref_count is not inc
     var buffer = std.mem.span(@ptrCast(*[pmap.page_size]u8, pmap.page2kva(page)));
     fixed = std.heap.FixedBufferAllocator.init(buffer);
@@ -208,7 +181,7 @@ pub fn create(elf: *u8) Error!*Proc {
     errdefer allocator.destroy(p);
     try p.init(pid_count);
 
-    try p.load_elf(elf);
+    // try p.load_elf(elf);
 
     p.next = procs;
     procs = p;

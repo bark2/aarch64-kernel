@@ -9,10 +9,6 @@ extern var __bss_start: u8;
 extern var __bss_end: u8;
 extern var _binary_ramdisk_start: u8;
 
-// extern fn sd_init() c_int;
-// extern fn sd_readblock(lba: u64, buffer: [*]u8, num: u64) c_int;
-// extern fn initrd_list(buf: *u8) void;
-
 comptime {
     // .text.boot to keep this in the first portion of the binary
     asm (
@@ -48,7 +44,6 @@ fn hlt() noreturn {
     }
 }
 
-// export fn boot_main() linksection(".text.main") void {
 export fn boot_main() linksection(".text.boot_main") void {
     @memset(@as(*volatile [1]u8, &__bss_start), 0, @ptrToInt(&__bss_end) - @ptrToInt(&__bss_start));
     // uart.init();
@@ -59,7 +54,7 @@ export fn boot_main() linksection(".text.boot_main") void {
     // log("CurrentEL {} exception level {}\n", .{ currentEL, currentEL >> 2 & 0x3 });
 
     var archive = @ptrCast([*]u8, &_binary_ramdisk_start);
-    initrd.list(archive);
+    // initrd.list(archive);
 
     var hdr: *elf.Elf = undefined;
     _ = initrd.lookup(archive, "zig-cache/kernel", &hdr);
