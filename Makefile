@@ -3,7 +3,11 @@ ZIG := zig
 
 all: clean extern kernel user tar kernel.img
 
-extern: extern/* aarch64-none-elf-gcc -g -c ./extern/delays.c aarch64-none-elf-gcc -g -c ./extern/sd.c mv delays.o zig-cache/delays.o mv sd.o zig-cache/sd.o
+extern: extern/*
+	aarch64-none-elf-gcc -g -c ./extern/delays.c
+	aarch64-none-elf-gcc -g -c ./extern/sd.c
+	mv delays.o zig-cache/delays.o
+	mv sd.o zig-cache/sd.o
 
 kernel: extern
 	$(ZIG) build
