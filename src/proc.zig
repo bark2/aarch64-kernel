@@ -10,6 +10,7 @@ const log = uart.log;
 usingnamespace @import("common.zig");
 const Allocator = std.mem.Allocator;
 const sd = @import("sd.zig");
+const initrd = @import("initrd.zig");
 
 pub const ProcState = enum {
     RUNNING,
@@ -32,6 +33,10 @@ const Proc = struct {
     state: ProcState,
 
     fn init(self: *Self, pid: usize) Error!void {
+        var spsr = arch.spsr_el1();
+        spsr &= ~@intCast(usize, 0x1); // return to EL0
+        spsr &= ~@intCast(usize, 0x1 << 4); // return to Aarch64
+
         // allocate translation table
         var pp1 = try pmap.page_alloc(true);
         errdefer pmap.page_free(pp1);
@@ -39,7 +44,7 @@ const Proc = struct {
         var tt = @ptrCast(*volatile pmap.Tt, pmap.page2kva(pp1));
         try pmap.map_region(tt, 0, (4 * 1024 - 1) * pmap.page_size, 0, 1); // hard coded for now
 
-        // allocate kernel stack
+        // allocate stack
         var pp2 = try pmap.page_alloc(true);
         errdefer pmap.page_free(pp2);
         pp2.ref_count += 1;
@@ -49,12 +54,11 @@ const Proc = struct {
         // const tf = @intToPtr(*exception.ExceptionFrame, sp);
         // sp -= @sizeof(Context);
 
-        var spsr = arch.spsr_el1();
-        spsr &= ~@intCast(usize, 0x1); // return to EL0
-        spsr &= ~@intCast(usize, 0x1 << 4); // return to Aarch64
-
-        // FIXME: after setting ttbr0 cannot write to low memory(phys memory)
-        // log("proc.main: {}\n", .{proc.main});
+        // allocate code area
+        var pp3 = try pmap.page_alloc(true);
+        errdefer pmap.page_free(pp3);
+        pp3.ref_count += 1;
+        var pc = @ptrToInt(pmap.page2kva(pp3));
 
         self.* = Proc{
             .next = null,
@@ -65,8 +69,7 @@ const Proc = struct {
                 .fp = 0,
                 .lr = 0,
                 .sp = pmap.phys_addr(sp),
-                // .elr = pmap.phys_addr(@ptrToInt(user.main)),
-                .elr = 0, // TODO: set to entry of user code
+                .elr = pc,
                 .spsr = spsr,
             },
             .state = ProcState.RUNNABLE,
@@ -107,12 +110,17 @@ const Proc = struct {
         pmap.page_decref(pmap.pa2page(self.ef.sp));
     }
 
-    pub fn load_elf(self: *Self, elf: *u8) !void {
+    pub fn load_elf(self: *Self, code: *u8) !void {
         // @intToPtr(fn () noreturn, hdr.entry - @import("pmap.zig").kern_base)();
-        var buf: [512]u8 = undefined;
-        const bytes_read = sd.readblock(0, &buf, 1);
-        // if (bytes_read == 0)
-        // return Error.SdTimeout;
+        var buf: [pmap.page_size]u8 = undefined;
+        const bytes = sd.readblock(0, &buf, pmap.page_size / sd.block_size);
+        if (bytes == 0) {
+            log("sd.err: {}\n", .{sd.sd_err});
+            return Error.SdError;
+        }
+
+        const archive = &buf;
+        initrd.list(archive);
     }
 
     pub fn run(self: *Self) noreturn {
@@ -173,6 +181,7 @@ pub fn init() Error!void {
     fixed = std.heap.FixedBufferAllocator.init(buffer);
     allocator = &fixed.allocator;
 
+    @setRuntimeSafety(false);
     cur_proc = try create(@intToPtr(*u8, 1));
 }
 
@@ -181,7 +190,7 @@ pub fn create(elf: *u8) Error!*Proc {
     errdefer allocator.destroy(p);
     try p.init(pid_count);
 
-    // try p.load_elf(elf);
+    try p.load_elf(@intToPtr(*u8, p.ef.elr));
 
     p.next = procs;
     procs = p;

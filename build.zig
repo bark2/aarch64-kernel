@@ -20,7 +20,7 @@ pub fn build(b: *Builder) !void {
     // b.default_step.dependOn(&sd.step);
 
     const kernel = b.addExecutable("kernel", "src/main.zig");
-    kernel.addAssemblyFile("src/set_ttbr0_el1_and_t0sz.s");
+    kernel.addAssemblyFile("src/set_ttbr1_and_tcr.s");
     kernel.addAssemblyFile("src/exception.s");
     kernel.addObjectFile("zig-cache/delays.o");
     kernel.addObjectFile("zig-cache/sd.o");

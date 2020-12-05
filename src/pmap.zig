@@ -89,7 +89,7 @@ pub const Page = *align(page_size) u8;
 pub const tt_entries = page_size / @sizeOf(TtEntry);
 pub const Tt = [tt_entries]TtEntry;
 
-extern fn set_ttbr0_el1_and_t0sz(_: *align(page_size) volatile Tt, _: usize, kern_base: usize) void;
+extern fn set_ttbr1_and_tcr(_: *align(page_size) volatile Tt, _: usize, kern_base: usize) void;
 
 // These variables are set in pmap.init()
 var kern_tt: *align(page_size) volatile Tt = undefined; // Kernel's initial page directory
@@ -121,7 +121,7 @@ pub fn init() Error!void {
     // try boot_map_region(kern_tt, 0, (page_count - 1) * page_size, 0, 0);
     try boot_map_region(kern_tt, uart.MMIO_BASE, 0x1000000, uart.MMIO_BASE, 0);
 
-    set_ttbr0_el1_and_t0sz(kern_tt, @bitCast(usize, TcrEl1{
+    set_ttbr1_and_tcr(kern_tt, @bitCast(usize, TcrEl1{
         .t0sz = TcrEl1.txsz_32b,
         .t1sz = TcrEl1.txsz_32b,
         .tg0 = TcrEl1.tg0_4k,

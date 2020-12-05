@@ -400,3 +400,5 @@ pub const SD_ERROR = -2;
 
 pub const readblock = sd_readblock;
 pub const init = sd_init;
+pub extern var sd_err: u32;
+pub const block_size = 512;
