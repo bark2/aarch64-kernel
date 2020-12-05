@@ -6,3 +6,4 @@ kernel.img
 rd.o
 ramdisk
 zig
+ex
