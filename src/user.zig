@@ -2,7 +2,7 @@ const syscall = @import("syscall.zig");
 
 export fn main() usize {
     const s = "hello from user\n";
-    _ = syscall2(@enumToInt(syscall.Syscall.PUTS), @ptrToInt(s[0..s.len]), 5);
+    _ = syscall2(@enumToInt(syscall.Syscall.PUTS), @ptrToInt(s[0..s.len]), s.len);
     _ = syscall1(@enumToInt(syscall.Syscall.KILL), 0);
     return 0;
 }

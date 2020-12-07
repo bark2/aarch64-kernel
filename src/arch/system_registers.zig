@@ -107,8 +107,8 @@ pub inline fn set_mair_el1(val: u64) void {
 }
 
 pub inline fn esr_el1() u64 {
-    return asm ("mrs x0, esr_el1"
-        : [ret] "=r" (-> u64)
+    return asm ("mrs %[esr], esr_el1"
+        : [esr] "=r" (-> u64)
     );
 }
 

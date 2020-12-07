@@ -130,7 +130,7 @@ const Proc = struct {
         for (pheaders) |*ph| {
             if (ph.type != elf.ELF_PROG_LOAD) continue;
 
-            log("pha: {x}\n", .{ph});
+            // log("pha: {x}\n", .{ph});
             try pmap.region_alloc(self.tt, ph.va, ph.memsz, 1);
             // arch.set_ttbr0_el1(@ptrToInt(self.tt));
             pmap.user_memzero(self.tt, ph.va, ph.memsz);
@@ -147,7 +147,7 @@ const Proc = struct {
             }
         }
 
-        log("entry: {x}\n", .{hdr.entry});
+        // log("entry: {x}\n", .{hdr.entry});
         self.ef.elr = hdr.entry;
 
         const highest_el0_address: usize = (1 << 32);

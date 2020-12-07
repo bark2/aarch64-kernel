@@ -74,7 +74,7 @@ pub export fn handler(exception: usize, ef: *ExceptionFrame) noreturn {
     proc.schedule();
 }
 
-fn dispatch(exception: Exception, ef: *ExceptionFrame) void {
+fn log_ef(exception: Exception, ef: *ExceptionFrame) void {
     log("\n{}\n", .{exception_names[@enumToInt(exception)]});
     const currentEL = asm volatile ("mrs x0, CurrentEL"
         : [ret] "=r" (-> usize)
@@ -98,7 +98,9 @@ fn dispatch(exception: Exception, ef: *ExceptionFrame) void {
         : [far] "=r" (-> usize)
     );
     log("far {x}\n", .{far});
+}
 
+fn dispatch(exception: Exception, ef: *ExceptionFrame) void {
     switch (exception) {
         // {exception type}_{taken from exception level}
         Exception.IRQ_EL1H => {
@@ -108,12 +110,8 @@ fn dispatch(exception: Exception, ef: *ExceptionFrame) void {
             // pop_ef(0);
         },
         Exception.SYNC_EL0_64 => {
-            if ((esr >> ESR_ELx_EC_SHIFT) == ESR_ELx_EC_SVC64) { // caused by an svc inst
+            if ((arch.esr_el1() >> ESR_ELx_EC_SHIFT) == ESR_ELx_EC_SVC64) { // caused by an svc inst
                 // x8 for syscall number, x0-x7 for arguments, x0 for return value
-                // log("{}", .{ef.xs[8]});
-                // for (ef.xs[0..8]) |x, i|
-                // log(", arg{}: {}", .{ i, x });
-                // log("\n", .{});
                 ef.xs[0] = syscall.syscall(ef.xs[8], ef.xs[0..8].*);
                 return;
             }
@@ -121,6 +119,7 @@ fn dispatch(exception: Exception, ef: *ExceptionFrame) void {
         else => {},
     }
 
+    log_ef(exception, ef);
     log("Execution is now stopped in exception handler\n", .{});
     while (true) {
         asm volatile ("wfe");
@@ -197,8 +196,8 @@ pub inline fn pop_ef(comptime el: usize, ef: *ExceptionFrame) noreturn {
             \\  add	sp, sp, #272
             \\  ldr x0, =boot_stack
             \\  add x0, x0, #8*(1 << 12)
-                \\  mov sp, x0
-                \\ mov x0, #0
+            \\  mov sp, x0
+            \\ mov x0, #0
             \\  eret
             :
             : [ef] "{sp}" (ef)

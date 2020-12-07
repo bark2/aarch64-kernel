@@ -467,7 +467,7 @@ pub fn region_alloc(tt: *align(page_size) volatile Tt, va: usize, len: usize, ap
         const pp = try page_alloc(false);
         errdefer page_free(pp);
         _ = try page_insert(tt, pp, @intToPtr(*allowzero u8, p), ap);
-        log("allocated: {}, va: {x}..{x}\n", .{ page2kva(pp), va, va + len });
+        // log("allocated: {}, va: {x}..{x}\n", .{ page2kva(pp), va, va + len });
     }
 }
 
@@ -481,7 +481,7 @@ pub fn user_memcpy(tt: *align(page_size) volatile Tt, dst_va_: usize, len: usize
             const kva = @intToPtr([*]u8, @ptrToInt(page2kva(pp)));
             const l = std.math.min(len - osrc, page_size - page_start);
             std.mem.copy(u8, kva[page_start .. page_start + l], src[osrc .. osrc + l]);
-            log("copy to:{}..{}\n", .{ &kva[page_start], &kva[page_start + l] });
+            // log("copy to:{}..{}\n", .{ &kva[page_start], &kva[page_start + l] });
             page_start = (page_start + l) % page_size;
             osrc += l;
             dst_va += l;
@@ -500,7 +500,7 @@ pub fn user_memzero(tt: *align(page_size) volatile Tt, dst_va: usize, len: usize
             const kva = @ptrCast([*]u8, page2kva(pp));
             const l = std.math.min(len - off, page_size - page_start);
             for (kva[page_start .. page_start + l]) |*p| p.* = 0;
-            log("memzero: {}..{}\n", .{ &kva[page_start], &kva[page_start + l] });
+            // log("memzero: {}..{}\n", .{ &kva[page_start], &kva[page_start + l] });
             page_start = (page_start + l) % page_size;
             off += l;
             dst += l;
