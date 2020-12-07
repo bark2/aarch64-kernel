@@ -1,7 +1,6 @@
 const std = @import("std");
 // const std = @import("gpio.zig");
 usingnamespace @import("common.zig");
-const assert = std.debug.assert;
 const pow = std.math.pow;
 const arch = @import("arch.zig");
 const uart = @import("uart.zig");
@@ -127,18 +126,6 @@ pub fn init() Error!void {
         .tg0 = TcrEl1.tg0_4k,
         .tg1 = TcrEl1.tg1_4k,
     }), kern_base);
-
-    // Unmap low kernel memory region
-    // var low_va: usize = 0;
-    // while (low_va < page_count * page_size) : (low_va += 1 << l3_off) {
-    //     var pte: *TtEntry = undefined;
-
-    //     @setRuntimeSafety(false);
-    //     if (page_lookup(kern_tt, @intToPtr(*u8, low_va), &pte)) |pp| {
-    //         pte.* = 0;
-    //         tlb_invalidate(kern_tt, @intToPtr(*u8, low_va));
-    //     } else unreachable;
-    // }
 }
 
 // If n>0, allocates enough pages of contiguous physical memory to hold 'n'
@@ -242,7 +229,7 @@ pub fn page_decref(p: *PageInfo) void {
 //
 // Hint 3: look at inc/mmu.h for useful macros that mainipulate page
 // table and page directory entries.
-pub fn walk(tt: *align(page_size) volatile Tt, va: *u8, create: bool) Error!?*TtEntry {
+pub fn walk(tt: *align(page_size) volatile Tt, va: *allowzero u8, create: bool) Error!?*TtEntry {
     // log("va: {}\n", .{va});
     var l1_tte = &tt[l1x(@ptrToInt(va))];
     // log("walk: {x} {x} {x}\n", .{ va, l1x(@ptrToInt(va)), l2x(@ptrToInt(va)) });
@@ -418,12 +405,12 @@ pub fn boot_stack_top() usize {
 //
 // Hint: The TA solution is implemented using pgdir_walk, page_remove,
 // and page2pa.
-pub fn page_insert(tt: *align(page_size) volatile Tt, pp: *PageInfo, va: *u8, ap: u2) Error!void {
+pub fn page_insert(tt: *align(page_size) volatile Tt, pp: *PageInfo, va: *allowzero u8, ap: u2) Error!void {
     var tte = (try walk(tt, va, true)).?;
     if (tte_addr(tte) != page2pa(pp)) {
         pp.*.ref_count += 1;
         if ((tte.* >> tte_valid_off) & 0x1 == 1)
-            page_remove(tt, @intToPtr(*u8, tte_addr(tte)));
+            page_remove(tt, @intToPtr(*allowzero u8, tte_addr(tte)));
     }
 
     tte.* = page2pa(pp);
@@ -440,7 +427,7 @@ pub fn page_insert(tt: *align(page_size) volatile Tt, pp: *PageInfo, va: *u8, ap
 // but should not be used by most callers.
 //
 // Return NULL if there is no page mapped at va.
-pub fn page_lookup(tt: *align(page_size) volatile Tt, va: *u8, opt_tte_store: ?**TtEntry) ?*PageInfo {
+pub fn page_lookup(tt: *align(page_size) volatile Tt, va: *allowzero u8, opt_tte_store: ?**TtEntry) ?*PageInfo {
     var opt_tte = walk(tt, va, false) catch unreachable;
     if (opt_tte) |tte| {
         if (opt_tte_store) |tte_store| tte_store.* = tte;
@@ -463,7 +450,7 @@ pub fn page_lookup(tt: *align(page_size) volatile Tt, va: *u8, opt_tte_store: ?*
 //
 // Hint: The TA solution is implemented using page_lookup,
 // 	tlb_invalidate, and page_decref.
-pub fn page_remove(tt: *align(page_size) volatile Tt, va: *u8) void {
+pub fn page_remove(tt: *align(page_size) volatile Tt, va: *allowzero u8) void {
     var tte: *TtEntry = undefined;
     if (page_lookup(tt, va, &tte)) |pp| {
         tte.* = 0;
@@ -472,27 +459,51 @@ pub fn page_remove(tt: *align(page_size) volatile Tt, va: *u8) void {
     }
 }
 
-pub fn map_region(tt: *align(page_size) volatile Tt, va: usize, size: usize, pa: PhysAddr, ap: u2) Error!void {
-    @setRuntimeSafety(false);
-    assert(va == round_up(va, page_size));
-    assert(pa == round_up(pa, page_size));
-    assert(size % page_size == 0);
-
-    var off: usize = 0;
-    while (off < size) : (off += (1 << l3_off)) {
-        _ = try page_insert(tt, pa2page(pa + off), @intToPtr(*u8, va + off), ap);
-        // var opt_tte = try walk(tt, @intToPtr(*u8, va + off), true);
-        // if (opt_tte) |tte| {
-        // tte.* = 0;
-        // @ptrCast(*u64, tte).* |= 1 << tte_valid_off;
-        // @ptrCast(*u64, tte).* |= 1 << tte_walk_off;
-        // @ptrCast(*u64, tte).* |= 1 << tte_af_off;
-        // @ptrCast(*u64, tte).* |= pa + off;
-        // }
+pub fn region_alloc(tt: *align(page_size) volatile Tt, va: usize, len: usize, ap: u2) Error!void {
+    var p = va;
+    while (round_down(p, page_size) < round_up(va + len, page_size)) : (p += (1 << l3_off)) {
+        const pp = try page_alloc(false);
+        _ = try page_insert(tt, pp, @intToPtr(*allowzero u8, p), ap);
+        log("allocated: {}\n", .{page2kva(pp)});
     }
 }
 
-fn tlb_invalidate(tt: *align(page_size) volatile Tt, va: *u8) void {
+pub fn user_memcpy(tt: *align(page_size) volatile Tt, dst_va_: usize, len: usize, src_kva: usize) void {
+    const src = @intToPtr([*]u8, src_kva);
+    var dst_va = dst_va_;
+    var page_start = dst_va % page_size;
+    var osrc: usize = 0;
+    while (osrc < len) {
+        if (page_lookup(tt, @intToPtr(*allowzero u8, dst_va), null)) |pp| {
+            const kva = @intToPtr([*]u8, @ptrToInt(page2kva(pp)));
+            // const l = std.math.min(len - (page_start + osrc), page_size);
+            const l = std.math.min(len - osrc, page_size - page_start);
+            std.mem.copy(u8, kva[page_start .. page_start + l], src[osrc .. osrc + l]);
+            page_start = (page_start + l) % page_size;
+            osrc += l;
+            dst_va += l;
+        } else {
+            panic("", null);
+        }
+    }
+}
+
+pub fn user_memzero(tt: *align(page_size) volatile Tt, dst_va: usize, len: usize) void {
+    var off: usize = 0;
+    while (off < len) {
+        if (page_lookup(tt, @intToPtr(*allowzero u8, dst_va + off), null)) |pp| {
+            const kva = @ptrCast([*]u8, page2kva(pp));
+            const end = (len - off) % page_size;
+            for (kva[off..end]) |*p| p.* = 0;
+            log("memzero: {}..{}\n", .{ &kva[off], &kva[end] });
+            off = round_down(off + (1 << l3_off), page_size);
+        } else {
+            panic("", null);
+        }
+    }
+}
+
+fn tlb_invalidate(tt: *align(page_size) volatile Tt, va: *allowzero u8) void {
     asm volatile (
         \\  TLBI     VMALLE1
         \\  DSB      SY
