@@ -462,6 +462,8 @@ pub fn page_remove(tt: *align(page_size) volatile Tt, va: *allowzero u8) void {
 pub fn region_alloc(tt: *align(page_size) volatile Tt, va: usize, len: usize, ap: u2) Error!void {
     var p = va;
     while (round_down(p, page_size) < round_up(va + len, page_size)) : (p += (1 << l3_off)) {
+        if (page_lookup(tt, @intToPtr(*allowzero u8, va), null) != null)
+            continue;
         const pp = try page_alloc(false);
         _ = try page_insert(tt, pp, @intToPtr(*allowzero u8, p), ap);
         log("allocated: {}\n", .{page2kva(pp)});
@@ -476,7 +478,6 @@ pub fn user_memcpy(tt: *align(page_size) volatile Tt, dst_va_: usize, len: usize
     while (osrc < len) {
         if (page_lookup(tt, @intToPtr(*allowzero u8, dst_va), null)) |pp| {
             const kva = @intToPtr([*]u8, @ptrToInt(page2kva(pp)));
-            // const l = std.math.min(len - (page_start + osrc), page_size);
             const l = std.math.min(len - osrc, page_size - page_start);
             std.mem.copy(u8, kva[page_start .. page_start + l], src[osrc .. osrc + l]);
             page_start = (page_start + l) % page_size;
@@ -489,14 +490,19 @@ pub fn user_memcpy(tt: *align(page_size) volatile Tt, dst_va_: usize, len: usize
 }
 
 pub fn user_memzero(tt: *align(page_size) volatile Tt, dst_va: usize, len: usize) void {
+    var dst = dst_va;
+    var page_start = dst_va & page_size;
     var off: usize = 0;
     while (off < len) {
-        if (page_lookup(tt, @intToPtr(*allowzero u8, dst_va + off), null)) |pp| {
+        if (page_lookup(tt, @intToPtr(*allowzero u8, dst), null)) |pp| {
             const kva = @ptrCast([*]u8, page2kva(pp));
-            const end = (len - off) % page_size;
-            for (kva[off..end]) |*p| p.* = 0;
-            log("memzero: {}..{}\n", .{ &kva[off], &kva[end] });
-            off = round_down(off + (1 << l3_off), page_size);
+            // const end = (len - off) % page_size;
+            const l = std.math.min(len - off, page_size - page_start);
+            for (kva[page_start .. page_start + l]) |*p| p.* = 0;
+            // log("memzero: {}..{}\n", .{ &kva[off], &kva[end] });
+            page_start = (page_start + l) % page_size;
+            off += l;
+            dst += l;
         } else {
             panic("", null);
         }
