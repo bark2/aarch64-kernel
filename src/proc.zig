@@ -62,7 +62,8 @@ const Proc = struct {
                 .xs = [_]u64{0} ** 29,
                 .fp = 0,
                 .lr = 0,
-                .sp = pmap.phys_addr(sp),
+                // .sp = pmap.phys_addr(sp),
+                .sp = 0,
                 .elr = 0,
                 .spsr = spsr,
             },
@@ -71,37 +72,44 @@ const Proc = struct {
     }
 
     pub fn deinit(self: *Self) void {
+        const Ttp = *align(pmap.page_size) volatile pmap.Tt;
         for (self.tt) |tte1, itte1| {
             // TODO: for 32bit of va only the first 4 entries could be in use
             if (itte1 == 4)
                 break;
-            if ((tte1 & pmap.tte_valid_off) != 1)
+            if ((tte1 & (1 << pmap.tte_valid_off)) != 1)
                 continue;
 
-            const pa1 = pmap.tte_addr(@intToPtr(*volatile u64, tte1));
-            const tt2 = @intToPtr(*volatile pmap.Tt, pmap.kern_addr(pa1));
+            // log("tte1: {x}, {x}\n", .{ tte1, ((tte1 >> 12) & ((1 << 36) - 1)) << 12 });
+            const pa1 = pmap.tte_addr(tte1);
+            const tt2 = @intToPtr(Ttp, pmap.kern_addr(pa1));
             for (tt2) |tte2, itte2| {
-                if ((tte2 & pmap.tte_valid_off) != 1)
+                if ((tte2 & (1 << pmap.tte_valid_off)) != 1)
                     continue;
 
-                const pa2 = pmap.tte_addr(@intToPtr(*volatile u64, tte2));
-                const tt3 = @intToPtr(*align(pmap.page_size) volatile pmap.Tt, pmap.kern_addr(pa2));
+                const pa2 = pmap.tte_addr(tte2);
+                // log("tte2: {x}, {x}\n", .{ tte2, ((tte2 >> 12) & ((1 << 36) - 1)) << 12 });
+                const tt3 = @intToPtr(Ttp, pmap.kern_addr(pa2));
                 for (tt3) |tte3, itte3| {
-                    if ((tte3 & pmap.tte_valid_off) == 1) {
-                        const va = pmap.gtaddr(@truncate(u2, itte1), @truncate(u9, itte2), @truncate(u9, itte3));
-                        // FIXME: after we allocate code region
-                        // pmap.page_remove(tt3, @intToPtr(*align(pmap.page_size) u8, va));
+                    if ((tte3 & (1 << pmap.tte_valid_off)) == 1) {
+                        // log("tte3: {x}, {x}\n", .{ tte3, ((tte3 >> 12) & ((1 << 36) - 1)) << 12 });
+                        // const va = pmap.gen_laddr(itte1, itte2, itte3);
+                        const pa3 = pmap.tte_addr(tte3);
+                        // log("page_decref(3): {x}\n", .{pa3});
+                        pmap.page_decref(pmap.pa2page(pa3));
                     }
                 }
 
-                pmap.page_decref(pmap.pa2page(pmap.phys_addr(@ptrToInt(tt3))));
+                // log("page_decref(2): {x}\n", .{pa2});
+                pmap.page_decref(pmap.pa2page(pa2));
             }
 
-            pmap.page_decref(pmap.pa2page(pmap.phys_addr(@ptrToInt(tt2))));
+            // log("page_decref(1): {x}\n", .{pa1});
+            pmap.page_decref(pmap.pa2page(pa1));
         }
 
+        // log("page_decref(tt): {x}\n", .{@ptrToInt(self.tt)});
         pmap.page_decref(pmap.pa2page(pmap.phys_addr(@ptrToInt(self.tt))));
-        pmap.page_decref(pmap.pa2page(self.ef.sp));
     }
 
     pub fn load_elf(self: *Self, code: *align(8) u8) !void {
@@ -125,7 +133,6 @@ const Proc = struct {
             log("pha: {x}\n", .{ph});
             try pmap.region_alloc(self.tt, ph.va, ph.memsz, 1);
             // arch.set_ttbr0_el1(@ptrToInt(self.tt));
-            log("ph.va: {}\n", .{ph.va});
             pmap.user_memzero(self.tt, ph.va, ph.memsz);
             var blk_start = ph.offset % sd.block_size;
             var off: usize = 0;
@@ -134,7 +141,6 @@ const Proc = struct {
                 const bytes = try sd.readblock(@truncate(u32, lba), &buf, 1);
                 assert(bytes == sd.block_size); // TODO
                 const len = std.math.min(ph.filesz - off, sd.block_size - blk_start);
-                log("ph.va: {}\n", .{ph.va});
                 pmap.user_memcpy(self.tt, ph.va + off, len, @ptrToInt(&buf[blk_start]));
                 blk_start = (blk_start + len) % sd.block_size;
                 off += len;
@@ -143,6 +149,10 @@ const Proc = struct {
 
         log("entry: {x}\n", .{hdr.entry});
         self.ef.elr = hdr.entry;
+
+        const highest_el0_address: usize = (1 << 32);
+        try pmap.region_alloc(self.tt, highest_el0_address - pmap.page_size, pmap.page_size, 1);
+        self.ef.sp = highest_el0_address;
     }
 
     pub fn run(self: *Self) noreturn {
@@ -223,8 +233,6 @@ pub fn create() Error!*Proc {
 }
 
 pub fn destory(pid: usize) void {
-    // FIXME
-    // find pid
     var ip = procs;
     while (ip != null and ip.?.pid != pid) : (ip = ip.?.next) {}
 

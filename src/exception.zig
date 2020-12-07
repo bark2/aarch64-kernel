@@ -80,24 +80,24 @@ fn dispatch(exception: Exception, ef: *ExceptionFrame) void {
         : [ret] "=r" (-> usize)
     );
     log("EL{}\n", .{currentEL >> 2 & 0x3});
-    const esr_el1 = asm ("mrs %[esr_el1], esr_el1"
-        : [esr_el1] "=r" (-> usize)
+    const esr = asm ("mrs %[esr], esr_el1"
+        : [esr] "=r" (-> usize)
     );
-    const esr_el1_ec = (esr_el1 >> 26) & ((1 << 6) - 1);
-    const esr_el1_iss = (esr_el1) & ((1 << 25) - 1);
-    log("esr_el1 {x}, ec: {b}b, iss: {b}b (https://developer.arm.com/docs/ddi0595/b/aarch64-system-registers/esr_el1 )\n", .{ esr_el1, esr_el1_ec, esr_el1_iss });
-    const elr_el1 = asm ("mrs %[elr_el1], elr_el1"
-        : [elr_el1] "=r" (-> usize)
+    const esr_ec = (esr >> 26) & ((1 << 6) - 1);
+    const esr_iss = (esr) & ((1 << 25) - 1);
+    log("esr {x}, ec: {b}b, iss: {b}b (https://developer.arm.com/docs/ddi0595/b/aarch64-system-registers/esr_el1 )\n", .{ esr, esr_ec, esr_iss });
+    const elr = asm ("mrs %[elr], elr_el1"
+        : [elr] "=r" (-> usize)
     );
-    log("elr_el1 {x}\n", .{elr_el1});
-    const spsr_el1 = asm ("mrs %[spsr_el1], spsr_el1"
-        : [spsr_el1] "=r" (-> usize)
+    log("elr {x}\n", .{elr});
+    const spsr = asm ("mrs %[spsr], spsr_el1"
+        : [spsr] "=r" (-> usize)
     );
-    log("spsr_el1 {x}\n", .{spsr_el1});
-    const far_el1 = asm ("mrs %[far_el1], far_el1"
-        : [far_el1] "=r" (-> usize)
+    log("spsr {x}\n", .{spsr});
+    const far = asm ("mrs %[far], far_el1"
+        : [far] "=r" (-> usize)
     );
-    log("far_el1 {x}\n", .{far_el1});
+    log("far {x}\n", .{far});
 
     switch (exception) {
         // {exception type}_{taken from exception level}
@@ -108,7 +108,7 @@ fn dispatch(exception: Exception, ef: *ExceptionFrame) void {
             // pop_ef(0);
         },
         Exception.SYNC_EL0_64 => {
-            if ((esr_el1 >> ESR_ELx_EC_SHIFT) == ESR_ELx_EC_SVC64) { // caused by an svc inst
+            if ((esr >> ESR_ELx_EC_SHIFT) == ESR_ELx_EC_SVC64) { // caused by an svc inst
                 // x8 for syscall number, x0-x7 for arguments, x0 for return value
                 // log("{}", .{ef.xs[8]});
                 // for (ef.xs[0..8]) |x, i|
@@ -197,7 +197,8 @@ pub inline fn pop_ef(comptime el: usize, ef: *ExceptionFrame) noreturn {
             \\  add	sp, sp, #272
             \\  ldr x0, =boot_stack
             \\  add x0, x0, #8*(1 << 12)
-            \\  mov sp, x0
+                \\  mov sp, x0
+                \\ mov x0, #0
             \\  eret
             :
             : [ef] "{sp}" (ef)

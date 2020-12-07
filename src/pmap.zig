@@ -40,8 +40,8 @@ const tte_ng_off = 11;
 const tte_addr_off = 12;
 const tte_ap_user = 1;
 
-pub fn tte_addr(pte: *volatile TtEntry) usize {
-    return ((pte.* >> tte_addr_off) & ((1 << 36) - 1)) << l3_off;
+pub fn tte_addr(tte: TtEntry) usize {
+    return ((tte >> tte_addr_off) & ((1 << 36) - 1)) << l3_off;
 }
 
 const TcrEl1 = packed struct {
@@ -252,7 +252,7 @@ pub fn walk(tt: *align(page_size) volatile Tt, va: *allowzero u8, create: bool) 
     }
     // log("l1x: {}, l1_tte: {x}\n", .{ l1x(@ptrToInt(va)), l1_tte.* });
 
-    var l2_tt = @intToPtr(*Tt, kern_addr(tte_addr(l1_tte)));
+    var l2_tt = @intToPtr(*Tt, kern_addr(tte_addr(l1_tte.*)));
     var l2_tte = &l2_tt[l2x(@ptrToInt(va))];
     if ((l2_tte.* >> tte_valid_off) & 0x1 == 0) {
         if (!create)
@@ -277,7 +277,7 @@ pub fn walk(tt: *align(page_size) volatile Tt, va: *allowzero u8, create: bool) 
     }
     // log("l2x: {}, l2_tte: {x}\n", .{ l2x(@ptrToInt(va)), l2_tte.* });
 
-    var l3_tt = @intToPtr(*Tt, kern_addr(tte_addr(l2_tte)));
+    var l3_tt = @intToPtr(*Tt, kern_addr(tte_addr(l2_tte.*)));
     return &l3_tt[l3x(@ptrToInt(va))];
 }
 
@@ -407,10 +407,10 @@ pub fn boot_stack_top() usize {
 // and page2pa.
 pub fn page_insert(tt: *align(page_size) volatile Tt, pp: *PageInfo, va: *allowzero u8, ap: u2) Error!void {
     var tte = (try walk(tt, va, true)).?;
-    if (tte_addr(tte) != page2pa(pp)) {
+    if (tte_addr(tte.*) != page2pa(pp)) {
         pp.*.ref_count += 1;
         if ((tte.* >> tte_valid_off) & 0x1 == 1)
-            page_remove(tt, @intToPtr(*allowzero u8, tte_addr(tte)));
+            page_remove(tt, @intToPtr(*allowzero u8, tte_addr(tte.*)));
     }
 
     tte.* = page2pa(pp);
@@ -432,7 +432,7 @@ pub fn page_lookup(tt: *align(page_size) volatile Tt, va: *allowzero u8, opt_tte
     if (opt_tte) |tte| {
         if (opt_tte_store) |tte_store| tte_store.* = tte;
         if ((tte.* >> tte_valid_off) & 0x1 == 1)
-            return pa2page(tte_addr(tte));
+            return pa2page(tte_addr(tte.*));
     }
     return null;
 }
@@ -465,8 +465,9 @@ pub fn region_alloc(tt: *align(page_size) volatile Tt, va: usize, len: usize, ap
         if (page_lookup(tt, @intToPtr(*allowzero u8, va), null) != null)
             continue;
         const pp = try page_alloc(false);
+        errdefer page_free(pp);
         _ = try page_insert(tt, pp, @intToPtr(*allowzero u8, p), ap);
-        log("allocated: {}\n", .{page2kva(pp)});
+        log("allocated: {}, va: {x}..{x}\n", .{ page2kva(pp), va, va + len });
     }
 }
 
@@ -480,6 +481,7 @@ pub fn user_memcpy(tt: *align(page_size) volatile Tt, dst_va_: usize, len: usize
             const kva = @intToPtr([*]u8, @ptrToInt(page2kva(pp)));
             const l = std.math.min(len - osrc, page_size - page_start);
             std.mem.copy(u8, kva[page_start .. page_start + l], src[osrc .. osrc + l]);
+            log("copy to:{}..{}\n", .{ &kva[page_start], &kva[page_start + l] });
             page_start = (page_start + l) % page_size;
             osrc += l;
             dst_va += l;
@@ -491,15 +493,14 @@ pub fn user_memcpy(tt: *align(page_size) volatile Tt, dst_va_: usize, len: usize
 
 pub fn user_memzero(tt: *align(page_size) volatile Tt, dst_va: usize, len: usize) void {
     var dst = dst_va;
-    var page_start = dst_va & page_size;
+    var page_start = dst_va % page_size;
     var off: usize = 0;
     while (off < len) {
         if (page_lookup(tt, @intToPtr(*allowzero u8, dst), null)) |pp| {
             const kva = @ptrCast([*]u8, page2kva(pp));
-            // const end = (len - off) % page_size;
             const l = std.math.min(len - off, page_size - page_start);
             for (kva[page_start .. page_start + l]) |*p| p.* = 0;
-            // log("memzero: {}..{}\n", .{ &kva[off], &kva[end] });
+            log("memzero: {}..{}\n", .{ &kva[page_start], &kva[page_start + l] });
             page_start = (page_start + l) % page_size;
             off += l;
             dst += l;
@@ -569,9 +570,10 @@ fn l3x(va: usize) u9 {
     return @truncate(u9, va >> l3_off);
 }
 
-// generate tables address
-pub fn gtaddr(itte1: u2, itte2: u9, itte3: u9) usize {
-    return (@intCast(u64, itte1) << l1_off) | (@intCast(u64, itte2) << l2_off) | (@intCast(u64, itte3) << l3_off);
+// generate linear address
+pub fn gen_laddr(itte1: usize, itte2: usize, itte3: usize) usize {
+    const m9 = (1 << 9) - 1;
+    return ((itte1 & m9) << l1_off) | ((itte2 & m9) << l2_off) | ((itte3 & m9) << l3_off);
 }
 
 test "boot_l1_tt" {
