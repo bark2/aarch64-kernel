@@ -1,11 +1,12 @@
+const std = @import("std");
 const builtin = @import("builtin");
 const uart = @import("uart.zig");
 const log = uart.log;
 const arch = @import("arch.zig");
 const exception = @import("exception.zig");
+pub const assert = std.debug.assert;
 
-pub const Error = error{OutOfMemory,SdError,SdTimeout};
-
+pub const Error = error{ OutOfMemory, SdError, SdTimeout,NotAnElf };
 
 pub fn panic(message: []const u8, trace: ?*builtin.StackTrace) noreturn {
     // debug.panic(trace, "KERNEL PANIC: {}", .{message});

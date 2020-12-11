@@ -148,11 +148,11 @@ inline fn init() !void {
 
 export fn kern_main() callconv(.Naked) void {
     @memset(@as(*volatile [1]u8, &__bss_start), 0, @ptrToInt(&__bss_end) - @ptrToInt(&__bss_start));
-    log("hello world!\n", .{});
+    log("booted\n", .{});
     init() catch {
         panic("Error in critical code\n", null);
     };
-    // log("hello world!\n", .{});
+    log("finished init\n", .{});
 
     // var p = proc.create(@intToPtr(*u8, 1)) catch panic("Out of Memory allocating proc\n", null);
     // log("proc: {}, {}\n", .{ @ptrCast(*u8, p), p.* });

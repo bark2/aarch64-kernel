@@ -66,7 +66,7 @@ export fn boot_main() linksection(".text.boot_main") void {
     var entry: usize = undefined;
     var pheaders = @intToPtr([*]elf.Proghdr, @ptrToInt(hdr) + hdr.phoff)[0..hdr.phnum];
     for (pheaders) |*ph, item| {
-        if (ph.type == 0x6474e551) continue; // skip GNU_STACK program header
+        if (ph.type != elf.ELF_PROG_LOAD) continue; // skip GNU_STACK program header
 
         // pa is the load address of this segment
         // offset is the offset of the segment in the file image

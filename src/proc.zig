@@ -5,7 +5,7 @@ const arch = @import("arch.zig");
 const user = @import("user.zig");
 const exception = @import("exception.zig");
 const uart = @import("uart.zig");
-const e = @import("elf.zig");
+const elf = @import("elf.zig");
 const log = uart.log;
 usingnamespace @import("common.zig");
 const Allocator = std.mem.Allocator;
@@ -28,7 +28,7 @@ const Proc = struct {
     const Self = @This();
     next: ?*Proc,
     pid: usize,
-    tt: *pmap.Tt,
+    tt: *align(pmap.page_size) volatile pmap.Tt,
     ef: exception.ExceptionFrame,
     state: ProcState,
 
@@ -37,12 +37,12 @@ const Proc = struct {
         spsr &= ~@intCast(usize, 0x1); // return to EL0
         spsr &= ~@intCast(usize, 0x1 << 4); // return to Aarch64
 
+        // TODO: use page_insert or map_region
         // allocate translation table
         var pp1 = try pmap.page_alloc(true);
         errdefer pmap.page_free(pp1);
         pp1.ref_count += 1;
         var tt = @ptrCast(*volatile pmap.Tt, pmap.page2kva(pp1));
-        try pmap.map_region(tt, 0, (4 * 1024 - 1) * pmap.page_size, 0, 1); // hard coded for now
 
         // allocate stack
         var pp2 = try pmap.page_alloc(true);
@@ -54,12 +54,6 @@ const Proc = struct {
         // const tf = @intToPtr(*exception.ExceptionFrame, sp);
         // sp -= @sizeof(Context);
 
-        // allocate code area
-        var pp3 = try pmap.page_alloc(true);
-        errdefer pmap.page_free(pp3);
-        pp3.ref_count += 1;
-        var pc = @ptrToInt(pmap.page2kva(pp3));
-
         self.* = Proc{
             .next = null,
             .pid = pid,
@@ -68,8 +62,9 @@ const Proc = struct {
                 .xs = [_]u64{0} ** 29,
                 .fp = 0,
                 .lr = 0,
-                .sp = pmap.phys_addr(sp),
-                .elr = pc,
+                // .sp = pmap.phys_addr(sp),
+                .sp = 0,
+                .elr = 0,
                 .spsr = spsr,
             },
             .state = ProcState.RUNNABLE,
@@ -77,50 +72,87 @@ const Proc = struct {
     }
 
     pub fn deinit(self: *Self) void {
+        const Ttp = *align(pmap.page_size) volatile pmap.Tt;
         for (self.tt) |tte1, itte1| {
             // TODO: for 32bit of va only the first 4 entries could be in use
             if (itte1 == 4)
                 break;
-            if ((tte1 & pmap.tte_valid_off) != 1)
+            if ((tte1 & (1 << pmap.tte_valid_off)) != 1)
                 continue;
 
-            const pa1 = pmap.tte_addr(@intToPtr(*volatile u64, tte1));
-            const tt2 = @intToPtr(*volatile pmap.Tt, pmap.kern_addr(pa1));
+            // log("tte1: {x}, {x}\n", .{ tte1, ((tte1 >> 12) & ((1 << 36) - 1)) << 12 });
+            const pa1 = pmap.tte_addr(tte1);
+            const tt2 = @intToPtr(Ttp, pmap.kern_addr(pa1));
             for (tt2) |tte2, itte2| {
-                if ((tte2 & pmap.tte_valid_off) != 1)
+                if ((tte2 & (1 << pmap.tte_valid_off)) != 1)
                     continue;
 
-                const pa2 = pmap.tte_addr(@intToPtr(*volatile u64, tte2));
-                const tt3 = @intToPtr(*align(pmap.page_size) volatile pmap.Tt, pmap.kern_addr(pa2));
+                const pa2 = pmap.tte_addr(tte2);
+                // log("tte2: {x}, {x}\n", .{ tte2, ((tte2 >> 12) & ((1 << 36) - 1)) << 12 });
+                const tt3 = @intToPtr(Ttp, pmap.kern_addr(pa2));
                 for (tt3) |tte3, itte3| {
-                    if ((tte3 & pmap.tte_valid_off) == 1) {
-                        const va = pmap.gtaddr(@truncate(u2, itte1), @truncate(u9, itte2), @truncate(u9, itte3));
-                        // FIXME: after we allocate code region
-                        // pmap.page_remove(tt3, @intToPtr(*align(pmap.page_size) u8, va));
+                    if ((tte3 & (1 << pmap.tte_valid_off)) == 1) {
+                        // log("tte3: {x}, {x}\n", .{ tte3, ((tte3 >> 12) & ((1 << 36) - 1)) << 12 });
+                        // const va = pmap.gen_laddr(itte1, itte2, itte3);
+                        const pa3 = pmap.tte_addr(tte3);
+                        // log("page_decref(3): {x}\n", .{pa3});
+                        pmap.page_decref(pmap.pa2page(pa3));
                     }
                 }
 
-                pmap.page_decref(pmap.pa2page(pmap.phys_addr(@ptrToInt(tt3))));
+                // log("page_decref(2): {x}\n", .{pa2});
+                pmap.page_decref(pmap.pa2page(pa2));
             }
 
-            pmap.page_decref(pmap.pa2page(pmap.phys_addr(@ptrToInt(tt2))));
+            // log("page_decref(1): {x}\n", .{pa1});
+            pmap.page_decref(pmap.pa2page(pa1));
         }
 
+        // log("page_decref(tt): {x}\n", .{@ptrToInt(self.tt)});
         pmap.page_decref(pmap.pa2page(pmap.phys_addr(@ptrToInt(self.tt))));
-        pmap.page_decref(pmap.pa2page(self.ef.sp));
     }
 
-    pub fn load_elf(self: *Self, code: *u8) !void {
-        // @intToPtr(fn () noreturn, hdr.entry - @import("pmap.zig").kern_base)();
-        var buf: [pmap.page_size]u8 = undefined;
-        const bytes = sd.readblock(0, &buf, pmap.page_size / sd.block_size);
-        if (bytes == 0) {
-            log("sd.err: {}\n", .{sd.sd_err});
-            return Error.SdError;
+    pub fn load_elf(self: *Self, code: *align(8) u8) !void {
+        @setRuntimeSafety(false);
+        // read first block of user code from disk
+        const blocks_per_page = pmap.page_size / sd.block_size;
+        var elf_buf: [pmap.page_size]u8 align(@alignOf(elf.Elf)) = undefined;
+        _ = try sd.readblock(0, &elf_buf, blocks_per_page);
+
+        // user code is valid elf
+        const hdr = @ptrCast(*elf.Elf, @alignCast(@alignOf(elf.Elf), &elf_buf));
+        if (hdr.magic != elf.ELF_MAGIC)
+            return Error.NotAnElf;
+        assert(hdr.ehsize < sd.block_size); // TODO
+
+        var buf: [pmap.page_size]u8 align(@alignOf(elf.Elf)) = undefined;
+        var pheaders = @intToPtr([*]elf.Proghdr, @ptrToInt(hdr) + hdr.phoff)[0..hdr.phnum];
+        for (pheaders) |*ph| {
+            if (ph.type != elf.ELF_PROG_LOAD) continue;
+
+            // log("pha: {x}\n", .{ph});
+            try pmap.region_alloc(self.tt, ph.va, ph.memsz, 1);
+            // arch.set_ttbr0_el1(@ptrToInt(self.tt));
+            pmap.user_memzero(self.tt, ph.va, ph.memsz);
+            var blk_start = ph.offset % sd.block_size;
+            var off: usize = 0;
+            while (off < ph.filesz) {
+                const lba = (ph.offset + off) / sd.block_size;
+                const bytes = try sd.readblock(@truncate(u32, lba), &buf, 1);
+                assert(bytes == sd.block_size); // TODO
+                const len = std.math.min(ph.filesz - off, sd.block_size - blk_start);
+                pmap.user_memcpy(self.tt, ph.va + off, len, @ptrToInt(&buf[blk_start]));
+                blk_start = (blk_start + len) % sd.block_size;
+                off += len;
+            }
         }
 
-        const archive = &buf;
-        initrd.list(archive);
+        // log("entry: {x}\n", .{hdr.entry});
+        self.ef.elr = hdr.entry;
+
+        const highest_el0_address: usize = (1 << 32);
+        try pmap.region_alloc(self.tt, highest_el0_address - pmap.page_size, pmap.page_size, 1);
+        self.ef.sp = highest_el0_address;
     }
 
     pub fn run(self: *Self) noreturn {
@@ -181,16 +213,17 @@ pub fn init() Error!void {
     fixed = std.heap.FixedBufferAllocator.init(buffer);
     allocator = &fixed.allocator;
 
-    @setRuntimeSafety(false);
-    cur_proc = try create(@intToPtr(*u8, 1));
+    cur_proc = try create();
 }
 
-pub fn create(elf: *u8) Error!*Proc {
+pub fn create() Error!*Proc {
     var p = try allocator.create(Proc);
     errdefer allocator.destroy(p);
     try p.init(pid_count);
 
-    try p.load_elf(@intToPtr(*u8, p.ef.elr));
+    @setRuntimeSafety(false);
+    if (p.ef.elr % @alignOf(elf.Elf) != 0) panic("wrong alignment for elf", null);
+    try p.load_elf(@intToPtr(*align(@alignOf(elf.Elf)) u8, p.ef.elr));
 
     p.next = procs;
     procs = p;
@@ -200,8 +233,6 @@ pub fn create(elf: *u8) Error!*Proc {
 }
 
 pub fn destory(pid: usize) void {
-    // FIXME
-    // find pid
     var ip = procs;
     while (ip != null and ip.?.pid != pid) : (ip = ip.?.next) {}
 

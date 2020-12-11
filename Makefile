@@ -14,9 +14,12 @@ kernel: extern
 
 user:
 	$(ZIG) build user
+	dd if=zig-cache/user of=sd.img
+	qemu-img resize -f raw sd.img 1M
 
 tar:
-	tar -cf ramdisk zig-cache/kernel zig-cache/user
+	# tar -cf ramdisk zig-cache/kernel zig-cache/user
+	tar -cf ramdisk zig-cache/kernel
 
 rd.o: ramdisk
 	aarch64-none-elf-ld -r -b binary -o rd.o ramdisk
