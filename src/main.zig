@@ -132,16 +132,7 @@ comptime {
 inline fn init() !void {
     uart.init();
     try pmap.init();
-    switch (sd.init()) {
-        sd.SD_OK => {},
-        sd.SD_ERROR => {
-            return Error.SdError;
-        },
-        sd.SD_TIMEOUT => {
-            return Error.SdTimeout;
-        },
-        else => unreachable,
-    }
+    try sd.init();
     try proc.init();
 }
 
@@ -153,7 +144,5 @@ export fn kern_main() callconv(.Naked) void {
     };
     log("finished init\n", .{});
 
-    // var p = proc.create(@intToPtr(*u8, 1)) catch panic("Out of Memory allocating proc\n", null);
-    // log("proc: {}, {}\n", .{ @ptrCast(*u8, p), p.* });
-    proc.procs.?.run();
+    proc.run(proc.procs.?);
 }

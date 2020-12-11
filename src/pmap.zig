@@ -6,6 +6,8 @@ const arch = @import("arch.zig");
 const uart = @import("uart.zig");
 const log = uart.log;
 
+pub const Error = error{OutOfMemory};
+
 // https://armv8-ref.codingbelief.com/en/chapter_d4/d43_3_memory_attribute_fields_in_the_vmsav8-64_translation_table_formats_descriptors.html
 
 // const TtEntry = packed struct {
@@ -28,19 +30,25 @@ const log = uart.log;
 //     ignored: u5 = 0, // [59:63]
 // };
 
-const TtEntry = u64;
+pub const TtEntry = u64;
 pub const tte_valid_off = 0;
-const tte_walk_off = 1;
-const tte_indx_off = 2;
-const tte_ns_off = 5;
-const tte_ap_off = 6;
+pub const tte_valid_len = 1;
+pub const tte_valid_valid = 1;
+pub const tte_walk_off = 1;
+pub const tte_indx_off = 2;
+pub const tte_ns_off = 5;
+pub const tte_ap_off = 6;
+pub const tte_ap_len = 2;
 const tte_sh_off = 8;
-const tte_af_off = 10;
+pub const tte_af_off = 10;
 const tte_ng_off = 11;
-const tte_addr_off = 12;
-const tte_ap_user = 1;
+pub const tte_addr_off = 12;
+pub const tte_ap_el1_rw_el0_none = 0;
+pub const tte_ap_el1_rw_el0_rw = 1;
+pub const tte_ap_el1_r_el0_none = 2;
+pub const tte_ap_el1_r_el0_r = 3;
 
-pub fn tte_addr(tte: TtEntry) usize {
+pub fn tte_paddr(tte: TtEntry) usize {
     return ((tte >> tte_addr_off) & ((1 << 36) - 1)) << l3_off;
 }
 
@@ -83,7 +91,7 @@ pub const PageInfo = struct {
     next: ?*PageInfo,
     ref_count: u32,
 };
-pub const Page = *align(page_size) u8;
+pub const Page = [*]align(page_size) u8;
 
 pub const tt_entries = page_size / @sizeOf(TtEntry);
 pub const Tt = [tt_entries]TtEntry;
@@ -91,7 +99,7 @@ pub const Tt = [tt_entries]TtEntry;
 extern fn set_ttbr1_and_tcr(_: *align(page_size) volatile Tt, _: usize, kern_base: usize) void;
 
 // These variables are set in pmap.init()
-var kern_tt: *align(page_size) volatile Tt = undefined; // Kernel's initial page directory
+pub var kern_tt: *align(page_size) volatile Tt = undefined; // Kernel's initial page directory
 var pages: *[page_count]PageInfo = undefined; // Physical page state array
 var page_free_list: ?*PageInfo = null; // Free list of physical pages
 
@@ -252,7 +260,7 @@ pub fn walk(tt: *align(page_size) volatile Tt, va: *allowzero u8, create: bool) 
     }
     // log("l1x: {}, l1_tte: {x}\n", .{ l1x(@ptrToInt(va)), l1_tte.* });
 
-    var l2_tt = @intToPtr(*Tt, kern_addr(tte_addr(l1_tte.*)));
+    var l2_tt = @intToPtr(*Tt, kern_addr(tte_paddr(l1_tte.*)));
     var l2_tte = &l2_tt[l2x(@ptrToInt(va))];
     if ((l2_tte.* >> tte_valid_off) & 0x1 == 0) {
         if (!create)
@@ -277,7 +285,7 @@ pub fn walk(tt: *align(page_size) volatile Tt, va: *allowzero u8, create: bool) 
     }
     // log("l2x: {}, l2_tte: {x}\n", .{ l2x(@ptrToInt(va)), l2_tte.* });
 
-    var l3_tt = @intToPtr(*Tt, kern_addr(tte_addr(l2_tte.*)));
+    var l3_tt = @intToPtr(*Tt, kern_addr(tte_paddr(l2_tte.*)));
     return &l3_tt[l3x(@ptrToInt(va))];
 }
 
@@ -407,12 +415,13 @@ pub fn boot_stack_top() usize {
 // and page2pa.
 pub fn page_insert(tt: *align(page_size) volatile Tt, pp: *PageInfo, va: *allowzero u8, ap: u2) Error!void {
     var tte = (try walk(tt, va, true)).?;
-    if (tte_addr(tte.*) != page2pa(pp)) {
+    if (tte_paddr(tte.*) != page2pa(pp)) {
         pp.*.ref_count += 1;
         if ((tte.* >> tte_valid_off) & 0x1 == 1)
-            page_remove(tt, @intToPtr(*allowzero u8, tte_addr(tte.*)));
+            page_remove(tt, @intToPtr(*allowzero u8, tte_paddr(tte.*)));
     }
 
+    // log("page_insert: va: {}, pa: {x}\n",.{va, page2pa(pp)});
     tte.* = page2pa(pp);
     @ptrCast(*u64, tte).* |= 1 << tte_valid_off;
     @ptrCast(*u64, tte).* |= 1 << tte_walk_off;
@@ -432,7 +441,7 @@ pub fn page_lookup(tt: *align(page_size) volatile Tt, va: *allowzero u8, opt_tte
     if (opt_tte) |tte| {
         if (opt_tte_store) |tte_store| tte_store.* = tte;
         if ((tte.* >> tte_valid_off) & 0x1 == 1)
-            return pa2page(tte_addr(tte.*));
+            return pa2page(tte_paddr(tte.*));
     }
     return null;
 }
@@ -459,15 +468,14 @@ pub fn page_remove(tt: *align(page_size) volatile Tt, va: *allowzero u8) void {
     }
 }
 
-pub fn region_alloc(tt: *align(page_size) volatile Tt, va: usize, len: usize, ap: u2) Error!void {
-    var p = va;
-    while (round_down(p, page_size) < round_up(va + len, page_size)) : (p += (1 << l3_off)) {
+pub fn region_alloc(tt: *align(page_size) volatile Tt, src_va: usize, len: usize, ap: u2) Error!void {
+    var va = src_va;
+    while (round_down(va, page_size) < round_up(src_va + len, page_size)) : (va += (1 << l3_off)) {
         if (page_lookup(tt, @intToPtr(*allowzero u8, va), null) != null)
             continue;
         const pp = try page_alloc(false);
         errdefer page_free(pp);
-        _ = try page_insert(tt, pp, @intToPtr(*allowzero u8, p), ap);
-        // log("allocated: {}, va: {x}..{x}\n", .{ page2kva(pp), va, va + len });
+        _ = try page_insert(tt, pp, @intToPtr(*allowzero u8, va), ap);
     }
 }
 
@@ -481,13 +489,10 @@ pub fn user_memcpy(tt: *align(page_size) volatile Tt, dst_va_: usize, len: usize
             const kva = @intToPtr([*]u8, @ptrToInt(page2kva(pp)));
             const l = std.math.min(len - osrc, page_size - page_start);
             std.mem.copy(u8, kva[page_start .. page_start + l], src[osrc .. osrc + l]);
-            // log("copy to:{}..{}\n", .{ &kva[page_start], &kva[page_start + l] });
             page_start = (page_start + l) % page_size;
             osrc += l;
             dst_va += l;
-        } else {
-            panic("", null);
-        }
+        } else unreachable;
     }
 }
 
@@ -504,9 +509,8 @@ pub fn user_memzero(tt: *align(page_size) volatile Tt, dst_va: usize, len: usize
             page_start = (page_start + l) % page_size;
             off += l;
             dst += l;
-        } else {
-            panic("", null);
-        }
+        } else
+            unreachable;
     }
 }
 
@@ -526,7 +530,7 @@ pub inline fn kern_addr(pa: usize) usize {
     return pa + kern_base;
 }
 
-fn page2pa(pp: *PageInfo) usize {
+pub fn page2pa(pp: *PageInfo) usize {
     const page_idx = ((@ptrToInt(pp) - @ptrToInt(pages)) / @sizeOf(PageInfo));
     return page_idx << page_bits;
 }
@@ -554,17 +558,17 @@ fn round_up(p: usize, n: usize) usize {
 
 const l1_off = l2_off + 9;
 
-fn l1x(va: usize) u2 {
+pub fn l1x(va: usize) u2 {
     return @truncate(u2, va >> l1_off);
 }
 
 const l2_off = l3_off + 9;
 
-fn l2x(va: usize) u9 {
+pub fn l2x(va: usize) u9 {
     return @truncate(u9, va >> l2_off);
 }
 
-const l3_off = page_bits;
+pub const l3_off = page_bits;
 
 fn l3x(va: usize) u9 {
     return @truncate(u9, va >> l3_off);

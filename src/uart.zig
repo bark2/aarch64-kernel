@@ -106,7 +106,6 @@ const WriterType = std.io.Writer(void, NoError, struct {
 var serial_writer: WriterType = undefined;
 
 pub fn log(comptime format: []const u8, args: anytype) void {
-    // 0x80dac <uart.log+12>   ldr    q0, [x0]
     // https://developer.arm.com/documentation/den0024/a/AArch64-Floating-point-and-NEON?lang=en
     serial_writer.print(format, args) catch return;
 }

@@ -1,35 +1,20 @@
-const syscall = @import("syscall.zig");
+usingnamespace @import("lib/syscall.zig");
+usingnamespace @import("lib/fork.zig");
+usingnamespace @import("lib/print.zig");
+const page_size = (1 << 12);
+const rtt_addr = (1 << 32) - page_size;
 
 export fn main() usize {
     const s = "hello from user\n";
-    _ = syscall2(@enumToInt(syscall.Syscall.PUTS), @ptrToInt(s[0..s.len]), s.len);
-    _ = syscall1(@enumToInt(syscall.Syscall.KILL), 0);
+    // if (fork() == 0) {
+    print("{}\n", .{s}) catch unreachable;
+
+    _ = fork() catch unreachable;
+
+    print("bye\n", .{}) catch unreachable;
+
+    _ = syscall1(@enumToInt(syscall.Syscall.KILL), 0) catch unreachable;
+    // }
+
     return 0;
-}
-
-fn syscall0(number: usize) usize {
-    return asm volatile (
-        \\ svc #0
-        : [ret] "={x0}" (-> usize)
-        : [number] "{x8}" (number)
-    );
-}
-
-fn syscall1(number: usize, arg1: usize) usize {
-    return asm volatile (
-        \\ svc #0
-        : [ret] "={x0}" (-> usize)
-        : [number] "{x8}" (number),
-          [arg1] "{x0}" (arg1)
-    );
-}
-
-fn syscall2(number: usize, arg1: usize, arg2: usize) usize {
-    return asm volatile (
-        \\ svc #0
-        : [ret] "={x0}" (-> usize)
-        : [number] "{x8}" (number),
-          [arg1] "{x0}" (arg1),
-          [arg2] "{x1}" (arg2)
-    );
 }

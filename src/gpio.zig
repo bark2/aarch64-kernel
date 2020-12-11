@@ -1,4 +1,4 @@
-pub const MMIO_BASE: [*]volatile u32 = @intToPtr([*]u32, 0x3F000000);
+pub const MMIO_BASE: [*]volatile u32 = @intToPtr([*]volatile u32, 0x3F000000);
 
 pub const GPFSEL0: *volatile u32 = @ptrCast(*u32,MMIO_BASE + 0x00200000);
 pub const GPFSEL1: *volatile u32 = @ptrCast(*u32,MMIO_BASE + 0x00200004);

@@ -57,21 +57,30 @@ const exception_names = init: {
 // Exception results in a exception frame being created on the kernel stack(and because
 // each user process has a kernel thread is is OK).
 
-pub export fn handler(exception: usize, ef: *ExceptionFrame) noreturn {
+pub export fn handler(exception_: usize, ef: *ExceptionFrame) noreturn {
+    const exception = @intToEnum(Exception, @truncate(u4, exception_));
     var stack_or_proc_ef = ef;
     // log("proc: {}, {}\n", .{ @ptrCast(*u8, proc.cur_proc.data.?), proc.cur_proc.?.* });
-    if (exception == @enumToInt(Exception.SYNC_EL0_64)) {
+    if (exception == Exception.SYNC_EL0_64) {
         proc.cur_proc.?.ef = stack_or_proc_ef.*;
         stack_or_proc_ef = &proc.cur_proc.?.ef;
     }
-    // log("proc: {}\n", .{proc.cur_proc.?.*});
 
-    dispatch(@intToEnum(Exception, @truncate(u4, exception)), stack_or_proc_ef);
-    if (proc.cur_proc) |cur_proc| {
-        if (cur_proc.state == proc.ProcState.RUNNING)
-            cur_proc.run();
+    dispatch(exception, stack_or_proc_ef);
+
+    switch (exception) {
+        Exception.SYNC_INVALID_EL1H, Exception.IRQ_EL1H, Exception.FIQ_INVALID_EL1H, Exception.ERROR_INVALID_EL1H => {
+            pop_ef(1, stack_or_proc_ef);
+        },
+        Exception.SYNC_EL0_64, Exception.IRQ_EL0_64, Exception.FIQ_INVALID_EL0_64, Exception.ERROR_INVALID_EL0_64 => {
+            if (proc.cur_proc) |cur_proc| {
+                if (cur_proc.state == proc.ProcState.RUNNING)
+                    proc.run(cur_proc);
+            }
+            proc.schedule();
+        },
+        else => unreachable,
     }
-    proc.schedule();
 }
 
 fn log_ef(exception: Exception, ef: *ExceptionFrame) void {
@@ -112,7 +121,7 @@ fn dispatch(exception: Exception, ef: *ExceptionFrame) void {
         Exception.SYNC_EL0_64 => {
             if ((arch.esr_el1() >> ESR_ELx_EC_SHIFT) == ESR_ELx_EC_SVC64) { // caused by an svc inst
                 // x8 for syscall number, x0-x7 for arguments, x0 for return value
-                ef.xs[0] = syscall.syscall(ef.xs[8], ef.xs[0..8].*);
+                ef.xs[0] = @intCast(usize, syscall.syscall(ef.xs[8], ef.xs[0..8].*));
                 return;
             }
         },
