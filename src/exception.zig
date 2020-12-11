@@ -58,59 +58,48 @@ const exception_names = init: {
 // Exception results in a exception frame being created on the kernel stack(and because
 // each user process has a kernel thread is is OK).
 
-pub export fn handler(exception_: usize, ef: *ExceptionFrame) noreturn {
-    const exception = @intToEnum(Exception, @truncate(u4, exception_));
+pub export fn handler(exception: usize, ef: *ExceptionFrame) noreturn {
     var stack_or_proc_ef = ef;
     // log("proc: {}, {}\n", .{ @ptrCast(*u8, proc.cur_proc.data.?), proc.cur_proc.?.* });
-    if (exception == Exception.SYNC_EL0_64) {
+    if (exception == @enumToInt(Exception.SYNC_EL0_64)) {
         proc.cur_proc.?.ef = stack_or_proc_ef.*;
         stack_or_proc_ef = &proc.cur_proc.?.ef;
     }
+    // log("proc: {}\n", .{proc.cur_proc.?.*});
 
-    dispatch(exception, stack_or_proc_ef);
-
-    switch (exception) {
-        Exception.SYNC_INVALID_EL1H, Exception.IRQ_EL1H, Exception.FIQ_INVALID_EL1H, Exception.ERROR_INVALID_EL1H => {
-            pop_ef(1, stack_or_proc_ef);
-        },
-        Exception.SYNC_EL0_64, Exception.IRQ_EL0_64, Exception.FIQ_INVALID_EL0_64, Exception.ERROR_INVALID_EL0_64 => {
-            if (proc.cur_proc) |cur_proc| {
-                if (cur_proc.state == proc.ProcState.RUNNING)
-                    proc.run(cur_proc);
-            }
-            proc.schedule();
-        },
-        else => unreachable,
+    dispatch(@intToEnum(Exception, @truncate(u4, exception)), stack_or_proc_ef);
+    if (proc.cur_proc) |cur_proc| {
+        if (cur_proc.state == proc.ProcState.RUNNING)
+            cur_proc.run();
     }
+    proc.schedule();
 }
 
-fn log_ef(exception: Exception, ef: *ExceptionFrame) void {
+fn dispatch(exception: Exception, ef: *ExceptionFrame) void {
     log("\n{}\n", .{exception_names[@enumToInt(exception)]});
     const currentEL = asm volatile ("mrs x0, CurrentEL"
         : [ret] "=r" (-> usize)
     );
     log("EL{}\n", .{currentEL >> 2 & 0x3});
-    const esr = asm ("mrs %[esr], esr_el1"
-        : [esr] "=r" (-> usize)
+    const esr_el1 = asm ("mrs %[esr_el1], esr_el1"
+        : [esr_el1] "=r" (-> usize)
     );
-    const esr_ec = (esr >> 26) & ((1 << 6) - 1);
-    const esr_iss = (esr) & ((1 << 25) - 1);
-    log("esr {x}, ec: {b}b, iss: {b}b (https://developer.arm.com/docs/ddi0595/b/aarch64-system-registers/esr_el1 )\n", .{ esr, esr_ec, esr_iss });
-    const elr = asm ("mrs %[elr], elr_el1"
-        : [elr] "=r" (-> usize)
+    const esr_el1_ec = (esr_el1 >> 26) & ((1 << 6) - 1);
+    const esr_el1_iss = (esr_el1) & ((1 << 25) - 1);
+    log("esr_el1 {x}, ec: {b}b, iss: {b}b (https://developer.arm.com/docs/ddi0595/b/aarch64-system-registers/esr_el1 )\n", .{ esr_el1, esr_el1_ec, esr_el1_iss });
+    const elr_el1 = asm ("mrs %[elr_el1], elr_el1"
+        : [elr_el1] "=r" (-> usize)
     );
-    log("elr {x}\n", .{elr});
-    const spsr = asm ("mrs %[spsr], spsr_el1"
-        : [spsr] "=r" (-> usize)
+    log("elr_el1 {x}\n", .{elr_el1});
+    const spsr_el1 = asm ("mrs %[spsr_el1], spsr_el1"
+        : [spsr_el1] "=r" (-> usize)
     );
-    log("spsr {x}\n", .{spsr});
-    const far = asm ("mrs %[far], far_el1"
-        : [far] "=r" (-> usize)
+    log("spsr_el1 {x}\n", .{spsr_el1});
+    const far_el1 = asm ("mrs %[far_el1], far_el1"
+        : [far_el1] "=r" (-> usize)
     );
-    log("far {x}\n", .{far});
-}
+    log("far_el1 {x}\n", .{far_el1});
 
-fn dispatch(exception: Exception, ef: *ExceptionFrame) void {
     switch (exception) {
         // {exception type}_{taken from exception level}
         Exception.IRQ_EL1H => {
@@ -122,16 +111,19 @@ fn dispatch(exception: Exception, ef: *ExceptionFrame) void {
             // pop_ef(0);
         },
         Exception.SYNC_EL0_64 => {
-            if ((arch.esr_el1() >> ESR_ELx_EC_SHIFT) == ESR_ELx_EC_SVC64) { // caused by an svc inst
+            if ((esr_el1 >> ESR_ELx_EC_SHIFT) == ESR_ELx_EC_SVC64) { // caused by an svc inst
                 // x8 for syscall number, x0-x7 for arguments, x0 for return value
-                ef.xs[0] = @intCast(usize, syscall.syscall(ef.xs[8], ef.xs[0..8].*));
+                // log("{}", .{ef.xs[8]});
+                // for (ef.xs[0..8]) |x, i|
+                // log(", arg{}: {}", .{ i, x });
+                // log("\n", .{});
+                ef.xs[0] = syscall.syscall(ef.xs[8], ef.xs[0..8].*);
                 return;
             }
         },
         else => {},
     }
 
-    log_ef(exception, ef);
     log("Execution is now stopped in exception handler\n", .{});
     while (true) {
         asm volatile ("wfe");
@@ -209,7 +201,6 @@ pub inline fn pop_ef(comptime el: usize, ef: *ExceptionFrame) noreturn {
             \\  ldr x0, =boot_stack
             \\  add x0, x0, #8*(1 << 12)
             \\  mov sp, x0
-            \\ mov x0, #0
             \\  eret
             :
             : [ef] "{sp}" (ef)

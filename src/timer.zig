@@ -73,7 +73,7 @@ pub fn handlerInterrupt()void{
 //ms : interrupt every X ms
 //clockNumber : there is 4 clock to use in system timer from 0 to 3
 pub fn init(ms:u32,comptime clockNumber:u32)void {
-    setTimer(3000);
+    setTimer(1000);
     controller.Enable_IRQs_1 =   1 << clockNumber;
     var clo:u32 = sysTimer.clockLow;
     const list  = @ptrCast([*] u32, &sysTimer.cmp0);

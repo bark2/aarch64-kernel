@@ -133,6 +133,10 @@ comptime {
 inline fn init() !void {
     uart.init();
     try pmap.init();
+    timer.init(0,1);
+    while(true){
+        
+    }
     try sd.init();
     try proc.init();
 }

@@ -2,6 +2,7 @@
 zig-cache/
 MMU-Examples/
 kernel.img
+sd.img
 rd.o
 ramdisk
 zig
