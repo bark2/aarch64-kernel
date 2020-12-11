@@ -6,6 +6,7 @@ const arch = @import("arch.zig");
 const uart = @import("uart.zig");
 const proc = @import("proc.zig");
 const syscall = @import("syscall.zig");
+const timer = @import("timer.zig");
 const log = uart.log;
 
 const ESR_ELx_EC_SHIFT = 26;
@@ -103,6 +104,8 @@ fn dispatch(exception: Exception, ef: *ExceptionFrame) void {
         // {exception type}_{taken from exception level}
         Exception.IRQ_EL1H => {
             // pop_ef(1);
+            timer.handlerInterrupt();
+            return;
         },
         Exception.IRQ_EL0_64 => {
             // pop_ef(0);

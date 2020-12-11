@@ -7,6 +7,7 @@ const arch = @import("arch.zig");
 const pmap = @import("pmap.zig");
 const proc = @import("proc.zig");
 const uart = @import("uart.zig");
+const timer = @import("timer.zig");
 const log = uart.log;
 const sd = @import("sd.zig");
 
