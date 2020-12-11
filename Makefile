@@ -1,7 +1,7 @@
 # ZIG := ~/src/kernel/zig
 ZIG := zig
 
-all: clean extern kernel user tar kernel.img
+all: extern kernel user tar kernel.img
 
 extern: extern/*
 	aarch64-none-elf-gcc -g -c ./extern/delays.c
