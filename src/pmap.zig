@@ -252,6 +252,7 @@ pub fn walk(tt: *align(page_size) volatile Tt, va: *allowzero u8, create: bool) 
         l1_tte.* = page2pa(pp);
         l1_tte.* |= (1 << tte_valid_off);
         l1_tte.* |= (1 << tte_walk_off);
+        l1_tte.* |= (tte_ap_el1_rw_el0_rw << tte_ap_off);
         // l1_tte.* = TtEntry{
         // .valid = 1,
         // .walk = 1,
@@ -273,6 +274,7 @@ pub fn walk(tt: *align(page_size) volatile Tt, va: *allowzero u8, create: bool) 
         l2_tte.* = page2pa(pp);
         l2_tte.* |= (1 << tte_valid_off);
         l2_tte.* |= (1 << tte_walk_off);
+        l2_tte.* |= (tte_ap_el1_rw_el0_rw << tte_ap_off);
         // l2_tte.* = 0;
         // @ptrCast(*u64, l2_tte).* |= 1 << tte_valid_off;
         // @ptrCast(*u64, l2_tte).* |= 1 << tte_walk_off;
@@ -440,7 +442,7 @@ pub fn page_lookup(tt: *align(page_size) volatile Tt, va: *allowzero u8, opt_tte
     var opt_tte = walk(tt, va, false) catch unreachable;
     if (opt_tte) |tte| {
         if (opt_tte_store) |tte_store| tte_store.* = tte;
-        if ((tte.* >> tte_valid_off) & 0x1 == 1)
+        if (get_bits(tte.*, tte_valid_off, tte_valid_len) == tte_valid_valid)
             return pa2page(tte_paddr(tte.*));
     }
     return null;
@@ -556,13 +558,13 @@ fn round_up(p: usize, n: usize) usize {
     return round_down(p + n - 1, n);
 }
 
-const l1_off = l2_off + 9;
+pub const l1_off = l2_off + 9;
 
 pub fn l1x(va: usize) u2 {
     return @truncate(u2, va >> l1_off);
 }
 
-const l2_off = l3_off + 9;
+pub const l2_off = l3_off + 9;
 
 pub fn l2x(va: usize) u9 {
     return @truncate(u9, va >> l2_off);

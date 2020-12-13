@@ -64,16 +64,7 @@ const Proc = struct {
 
     pub fn deinit(self: *Self) void {
         const Ttp = *align(pmap.page_size) volatile pmap.Tt;
-        // for (self.tt[0..1]) |tte1, itte1| {
-        // TODO: for 32bit of va only the first 4 entries could be in use
-        // if (itte1 == 4)
-        // break;
-        // if ((tte1 & (1 << pmap.tte_valid_off)) != 1)
-        // continue;
-
-        // log("tte1: {x}, {x}\n", .{ tte1, ((tte1 >> 12) & ((1 << 36) - 1)) << 12 });
-        const pa1 = pmap.tte_paddr(self.tt[0]);
-        const tt2 = @intToPtr(Ttp, pmap.kern_addr(pa1));
+        const tt2 = @intToPtr(Ttp, pmap.kern_addr(pmap.tte_paddr(self.tt[0])));
         for (tt2) |tte2, itte2| {
             if ((tte2 & (1 << pmap.tte_valid_off)) != 1)
                 continue;
@@ -83,16 +74,14 @@ const Proc = struct {
             const tt3 = @intToPtr(Ttp, pmap.kern_addr(pa2));
             for (tt3) |tte3, itte3| {
                 if ((tte3 & (1 << pmap.tte_valid_off)) == 1) {
-                    log("{}, {}\n", .{ itte2, itte3 });
-                    // log("tte3: {x}, {x}\n", .{ tte3, ((tte3 >> 12) & ((1 << 36) - 1)) << 12 });
-                    // const va = pmap.gen_laddr(itte1, itte2, itte3);
                     const pa3 = pmap.tte_paddr(tte3);
-                    log("page_decref(3): {x}\n", .{pa3});
-                    // const p3 = pmap.pa2page(pa3);
-                    // if (p3.ref_count > 0)
-                    // pmap.page_decref(p3);
-                    // tt3[itte3] = 0;
-                    pmap.page_remove(self.tt, @intToPtr(*allowzero u8, pmap.gen_laddr(0, itte2, itte3)));
+                    const va = @intToPtr(*allowzero u8, pmap.gen_laddr(0, itte2, itte3));
+                    log("[{}][{}]: va: {}, pa: {x}\n", .{ itte2, itte3, va, pa3 });
+                    const p3 = pmap.pa2page(pa3);
+                    if (p3.ref_count > 0)
+                        pmap.page_decref(p3);
+                    tt3[itte3] = 0;
+                    // pmap.page_remove(self.tt, va);
                 }
             }
 
@@ -123,7 +112,7 @@ const Proc = struct {
             if (ph.type != elf.ELF_PROG_LOAD) continue;
 
             // log("ph: {x}\n", .{ph});
-            try pmap.region_alloc(self.tt, ph.va, ph.memsz, 1);
+            try pmap.region_alloc(self.tt, ph.va, ph.memsz, pmap.tte_ap_el1_rw_el0_rw);
             pmap.user_memzero(self.tt, ph.va, ph.memsz);
             var blk_start = ph.offset % sd.block_size;
             var off: usize = 0;
@@ -144,20 +133,24 @@ const Proc = struct {
 
     fn init_virtual_memory(self: *Self) !void {
         const vtta = (1 << 30) - pmap.page_size;
-        const user_base_entry = (1 << pmap.tte_valid_off) |
+        const all_read_base_entry = (1 << pmap.tte_valid_off) |
             (1 << pmap.tte_walk_off) |
             (1 << pmap.tte_af_off) |
             (@intCast(u64, pmap.tte_ap_el1_r_el0_r) << pmap.tte_ap_off);
 
-        const l2_tt = @intToPtr(*volatile pmap.Tt, pmap.kern_addr(pmap.tte_paddr(self.tt[0])));
-        l2_tt[pmap.tt_entries - 1] = pmap.tte_paddr(self.tt[0]) | user_base_entry;
+        const l2_tt_pa = pmap.tte_paddr(self.tt[0]);
+        const l2_tt = @intToPtr(*volatile pmap.Tt, pmap.kern_addr(l2_tt_pa));
+        l2_tt[pmap.tt_entries - 1] = l2_tt_pa | all_read_base_entry;
+        log("l2_tt_pa: {x}\n", .{l2_tt_pa});
 
         // initialize user stack
         const sp_top = (1 << 30) - pmap.page_size;
-        try pmap.region_alloc(self.tt, sp_top - pmap.page_size, pmap.page_size, 1);
+        try pmap.region_alloc(self.tt, sp_top - pmap.page_size, pmap.page_size, pmap.tte_ap_el1_rw_el0_rw);
         self.ef.sp = sp_top;
 
         for (l2_tt) |tte, i| {
+            if (i == pmap.tt_entries - 1)
+                continue;
             if (get_bits(tte, pmap.tte_valid_off, pmap.tte_valid_len) == pmap.tte_valid_valid) {
                 const l3_tt = @intToPtr(*volatile pmap.Tt, pmap.kern_addr(pmap.tte_paddr(tte)));
                 for (l3_tt) |tte3, j| {
@@ -166,6 +159,13 @@ const Proc = struct {
                 }
             }
         }
+
+        // const tte = @intToPtr(*volatile pmap.Tt, pmap.kern_addr(pmap.tte_paddr(l2_tt[510])))[346];
+        // if (get_bits(tte, pmap.tte_valid_off, pmap.tte_valid_len) == pmap.tte_valid_valid)
+        // log("{b}, 0x{x}\n", .{ tte, pmap.tte_paddr(tte) });
+        var tte: *pmap.TtEntry = undefined;
+        var pp = pmap.page_lookup(self.tt, @intToPtr(*allowzero u8, 0x3fe00000), &tte);
+        log("tte: {x} {}\n", .{ pmap.tte_paddr(tte.*), (tte.* >> pmap.tte_ap_off) & 3 });
     }
 };
 
