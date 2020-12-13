@@ -8,6 +8,7 @@ const pmap = @import("pmap.zig");
 const proc = @import("proc.zig");
 const uart = @import("uart.zig");
 const timer = @import("timer.zig");
+const DMA = @import("DMA.zig");
 const log = uart.log;
 const sd = @import("sd.zig");
 
@@ -133,7 +134,8 @@ comptime {
 inline fn init() !void {
     uart.init();
     try pmap.init();
-    timer.init(0,1);
+    timer.init();
+    DMA.init();
     while(true){
         
     }

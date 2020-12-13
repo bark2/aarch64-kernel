@@ -70,7 +70,7 @@ pub export fn handler(exception: usize, ef: *ExceptionFrame) noreturn {
     dispatch(@intToEnum(Exception, @truncate(u4, exception)), stack_or_proc_ef);
     if (proc.cur_proc) |cur_proc| {
         if (cur_proc.state == proc.ProcState.RUNNING)
-            cur_proc.run();
+            proc.run(cur_proc);
     }
     proc.schedule();
 }
@@ -103,9 +103,8 @@ fn dispatch(exception: Exception, ef: *ExceptionFrame) void {
     switch (exception) {
         // {exception type}_{taken from exception level}
         Exception.IRQ_EL1H => {
-            // pop_ef(1);
-            timer.handlerInterrupt();
-            return;
+            timer.handlerInterruptPending1();
+            pop_ef(1,ef);
         },
         Exception.IRQ_EL0_64 => {
             // pop_ef(0);
