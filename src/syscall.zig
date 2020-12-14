@@ -1,3 +1,4 @@
+usingnamespace @import("common.zig");
 const uart = @import("uart.zig");
 const log = uart.log;
 const proc = @import("proc.zig");
@@ -8,20 +9,22 @@ pub const Syscall = enum {
     KILL,
     PUTS,
     YIELD,
-    LIGHT_FORK,
+    PROC_ALLOC,
     PROC_SET_STATE,
-    SET_PROC_EXCEPTION_FRAME,
+    PROC_PID,
+    PAGE_ALLOC,
     PAGE_MAP,
 };
 
 fn kill(pid: usize) !void {
     try proc.destory(pid);
+    if (proc.cur_proc == null)
+        proc.schedule();
 }
 
 fn puts(s: usize, len: usize) void {
     var tte: *pmap.TtEntry = undefined;
-    // log("s: {}\n", .{s});
-    if (pmap.page_lookup(proc.cur_proc.?.tt, @intToPtr(*allowzero u8, s), &tte)) |pp| {
+    if (pmap.page_lookup(proc.cur_proc.?.tt, s, &tte)) |pp| {
         const is_valid = get_bits(tte.*, pmap.tte_valid_off, pmap.tte_valid_len);
         if (is_valid != pmap.tte_valid_valid)
             proc.destory(proc.cur_proc.?.pid) catch unreachable;
@@ -43,9 +46,9 @@ fn yield() void {
     proc.cur_proc.?.state = proc.ProcState.RUNNABLE;
 }
 
-fn light_fork() !usize {
+fn proc_alloc() !usize {
     var p = try proc.alloc();
-    p.state = proc.ProcState.NOT_RUNNABLE;
+    assert(p.state == proc.ProcState.NOT_RUNNABLE);
     p.ef = proc.cur_proc.?.ef;
     p.ef.xs[0] = 0;
     return p.pid;
@@ -56,18 +59,36 @@ fn proc_set_state(pid: usize, state: proc.ProcState) !void {
     p.state = state;
 }
 
-fn set_proc_exception_frame(pid: usize, opt_ef: ?*ExceptionFrame) !void {
-    if (opt_ef) |ef| {
-        if (proc.find(pid)) |p| {
-            p.ef = ef.*;
-            return;
-        }
-        return error.NotFound;
-    }
-    return error.Null;
+fn proc_pid() usize {
+    return proc.cur_proc.?.pid;
 }
 
-fn page_map(srcpid: usize, srcva: usize, dstpid: usize, dstva: usize, ap: usize) !void {}
+fn page_alloc(dstpid: usize, dstva: usize, page_desc: usize) !void {
+    const final_dstpid = if (dstpid == 0) proc.cur_proc.?.pid else dstpid;
+    const dst = if (proc.find(final_dstpid)) |dst| dst else return error.NotFound;
+
+    const pp = try pmap.page_alloc(true);
+    const ap = @truncate(u2, get_bits(page_desc, pmap.tte_ap_off, pmap.tte_ap_len));
+    log("dstva: {x}\n", .{dstva});
+    try pmap.page_insert(dst.tt, pp, dstva, ap);
+
+    var ppsrc = pmap.page_lookup(proc.cur_proc.?.tt, dstva, null).?;
+    @memcpy(@ptrCast([*]u8, pmap.page2kva(pp)), @ptrCast([*]u8, pmap.page2kva(ppsrc)), pmap.page_size);
+}
+
+fn page_map(srcpid: usize, srcva: usize, dstpid: usize, dstva: usize, page_desc: usize) !void {
+    const final_srcpid = if (srcpid == 0) proc.cur_proc.?.pid else srcpid;
+    const final_dstpid = if (dstpid == 0) proc.cur_proc.?.pid else dstpid;
+    const src = if (proc.find(final_srcpid)) |src| src else return error.NotFound;
+    const dst = if (proc.find(final_dstpid)) |dst| dst else return error.NotFound;
+
+    var src_tte: *pmap.TtEntry = undefined;
+    const srcpp = if (pmap.page_lookup(src.tt, srcva, &src_tte)) |pp| pp else return error.BadValue;
+
+    const ap = @truncate(u2, get_bits(page_desc, pmap.tte_ap_off, pmap.tte_ap_len));
+    log("srcva: {x}, dstva: {x}\n", .{ srcva, dstva });
+    try pmap.page_insert(dst.tt, srcpp, dstva, ap);
+}
 
 fn syscall_(isyscall: usize, args: [8]usize) !usize {
     return switch (@intToEnum(Syscall, @truncate(@typeInfo(Syscall).Enum.tag_type, isyscall))) {
@@ -83,14 +104,18 @@ fn syscall_(isyscall: usize, args: [8]usize) !usize {
             yield();
             break :yield_blk 0;
         },
-        Syscall.LIGHT_FORK => try light_fork(),
+        Syscall.PROC_ALLOC => try proc_alloc(),
         Syscall.PROC_SET_STATE => proc_set_state_blk: {
-            try proc_set_state(args[0], @intToEnum(proc.ProcState, @truncate(@typeInfo(proc.ProcState).Enum.tag_type, args[1])));
+            try proc_set_state(
+                args[0],
+                @intToEnum(proc.ProcState, @truncate(@typeInfo(proc.ProcState).Enum.tag_type, args[1])),
+            );
             break :proc_set_state_blk 0;
         },
-        Syscall.SET_PROC_EXCEPTION_FRAME => set_proc_exception_frame_blk: {
-            try set_proc_exception_frame(args[0], @intToPtr(?*ExceptionFrame, args[1]));
-            break :set_proc_exception_frame_blk 0;
+        Syscall.PROC_PID => proc_pid(),
+        Syscall.PAGE_ALLOC => page_alloc_blk: {
+            try page_alloc(args[0], args[1], args[2]);
+            break :page_alloc_blk 0;
         },
         Syscall.PAGE_MAP => page_map_blk: {
             try page_map(args[0], args[1], args[2], args[3], args[4]);
@@ -101,8 +126,4 @@ fn syscall_(isyscall: usize, args: [8]usize) !usize {
 
 pub fn syscall(isyscall: usize, args: [8]usize) usize {
     return syscall_(isyscall, args) catch |err| return @bitCast(usize, -@intCast(isize, @truncate(u16, @errorToInt(err))));
-}
-
-fn get_bits(val: usize, comptime off: usize, comptime len: usize) usize {
-    return (val >> off) & ((1 << len) - 1);
 }

@@ -1,7 +1,7 @@
 # ZIG := ~/src/kernel/zig
 ZIG := zig
 
-all: extern kernel user tar kernel.img
+all: clean extern kernel user tar kernel.img
 
 extern: extern/*
 	aarch64-none-elf-gcc -g -c ./extern/delays.c
@@ -18,7 +18,6 @@ user:
 	qemu-img resize -f raw sd.img 1M
 
 tar:
-	# tar -cf ramdisk zig-cache/kernel zig-cache/user
 	tar -cf ramdisk zig-cache/kernel
 
 rd.o: ramdisk

@@ -34,7 +34,6 @@ const dmaController :*DmaController = @intToPtr(*DmaController,BaseDMA + 0xfe0);
 
 pub fn init()void {
     dmaController.en = 1;
-    log("1 {x} \n",.{dmaController.en});
-    log("2 {x} \n",.{dmaController.status});
-
+    // log("1 {x} \n",.{dmaController.en});
+    // log("2 {x} \n",.{dmaController.status});
 }

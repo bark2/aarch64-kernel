@@ -6,11 +6,12 @@ const arch = @import("arch.zig");
 const uart = @import("uart.zig");
 const proc = @import("proc.zig");
 const syscall = @import("syscall.zig");
+const pmap = @import("pmap.zig");
 const timer = @import("timer.zig");
 const log = uart.log;
-
-const ESR_ELx_EC_SHIFT = 26;
-const ESR_ELx_EC_SVC64 = 0x15;
+// const ESR_ELx_EC_SHIFT = 26;
+// const ESR_ELx_EC_SVC64 = 0x15;
+// const ESR_ELx_EC_DABT_LOW = 0x24;
 
 pub const ExceptionFrame = packed struct {
     xs: [29]u64,
@@ -66,7 +67,6 @@ pub export fn handler(exception_: usize, ef: *ExceptionFrame) noreturn {
         proc.cur_proc.?.ef = stack_or_proc_ef.*;
         stack_or_proc_ef = &proc.cur_proc.?.ef;
     }
-    // log("proc: {}\n", .{proc.cur_proc.?.*});
 
     dispatch(exception, stack_or_proc_ef);
 
@@ -105,12 +105,11 @@ fn log_ef(exception: Exception, ef: *ExceptionFrame) void {
         : [spsr_el1] "=r" (-> usize)
     );
     log("spsr_el1 {x}\n", .{spsr_el1});
-    const far_el1 = asm ("mrs %[far_el1], far_el1"
-        : [far_el1] "=r" (-> usize)
-    );
-    log("far_el1 {x}\n", .{far_el1});
+    const far = arch.far_el1();
+    log("far_el1 {x}, l1:{}, l2:{}, l3:{}\n", .{ far, pmap.l1x(far), pmap.l2x(far), pmap.l3x(far) });
 }
 
+// TODO: include https://elixir.bootlin.com/linux/v4.9.120/source/arch/arm64/include/asm/esr.h
 fn dispatch(exception: Exception, ef: *ExceptionFrame) void {
     switch (exception) {
         // {exception type}_{taken from exception level}
@@ -121,18 +120,23 @@ fn dispatch(exception: Exception, ef: *ExceptionFrame) void {
             // pop_ef(0);
         },
         Exception.SYNC_EL0_64 => {
-            if ((arch.esr_el1() >> ESR_ELx_EC_SHIFT) == ESR_ELx_EC_SVC64) { // caused by an svc inst
+            if ((arch.esr_el1() >> arch.ESR_ELx_EC_SHIFT) == arch.ESR_ELx_EC_SVC64) { // caused by an svc inst
                 ef.xs[0] = @intCast(usize, syscall.syscall(ef.xs[8], ef.xs[0..8].*));
-                return;
+            } else {
+                log_ef(exception, ef);
+                log("Execution is now stopped in exception handler\n", .{});
+                while (true) {
+                    asm volatile ("wfe");
+                }
             }
         },
-        else => {},
-    }
-
-    log_ef(exception, ef);
-    log("Execution is now stopped in exception handler\n", .{});
-    while (true) {
-        asm volatile ("wfe");
+        else => {
+            log_ef(exception, ef);
+            log("Execution is now stopped in exception handler\n", .{});
+            while (true) {
+                asm volatile ("wfe");
+            }
+        },
     }
 }
 
@@ -203,11 +207,13 @@ pub inline fn pop_ef(comptime el: usize, ef: *ExceptionFrame) noreturn {
             \\  ldp	x24, x25, [sp, #16 * 12]
             \\  ldp	x26, x27, [sp, #16 * 13]
             \\  ldp	x28, x29, [sp, #16 * 14]
-            \\  add	sp, sp, #272
-            \\  ldr x0, =boot_stack
-            \\  add x0, x0, #8*(1 << 12)
-            \\  mov sp, x0
-            \\  mov x0, #0
+            \\  ldr     x0, =boot_stack
+            \\  add     x0, x0, #8*(1 << 12)
+            \\  str     x1, [x0, #-8]!     // store x1 on the new stack
+            \\  ldr     x1, [sp]           // reread x0 into x1
+            \\  str     x1, [x0, #-8]!     // store x0 on the new stack
+            \\  mov     sp, x0             // load the new stack
+            \\  ldp     x0, x1, [sp], #16  // load the saved registers
             \\  eret
             :
             : [ef] "{sp}" (ef)

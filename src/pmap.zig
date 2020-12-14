@@ -47,6 +47,7 @@ pub const tte_ap_el1_rw_el0_none = 0;
 pub const tte_ap_el1_rw_el0_rw = 1;
 pub const tte_ap_el1_r_el0_none = 2;
 pub const tte_ap_el1_r_el0_r = 3;
+pub const tte_cow = 1 << 58;
 
 pub fn tte_paddr(tte: TtEntry) usize {
     return ((tte >> tte_addr_off) & ((1 << 36) - 1)) << l3_off;
@@ -77,6 +78,7 @@ const TcrEl1 = packed struct {
     pub const tg0_4k = 0;
     pub const tg1_4k = 2;
     pub const txsz_32b = 64 - 32;
+    pub const txsz_39b = 64 - 39;
     pub const txsz_48b = 64 - 48;
 };
 
@@ -129,7 +131,7 @@ pub fn init() Error!void {
     try boot_map_region(kern_tt, uart.MMIO_BASE, 0x1000000, uart.MMIO_BASE, 0);
 
     set_ttbr1_and_tcr(kern_tt, @bitCast(usize, TcrEl1{
-        .t0sz = TcrEl1.txsz_32b,
+        .t0sz = TcrEl1.txsz_39b,
         .t1sz = TcrEl1.txsz_32b,
         .tg0 = TcrEl1.tg0_4k,
         .tg1 = TcrEl1.tg1_4k,
@@ -203,6 +205,7 @@ pub fn page_alloc(alloc_zero: bool) Error!*PageInfo {
 // Return a page to the free list.
 // (This function should only be called when pp->pp_ref reaches 0.)
 pub fn page_free(p: *PageInfo) void {
+    log("free: {x}\n", .{page2pa(p)});
     p.*.next = page_free_list;
     page_free_list = p;
 }
@@ -212,8 +215,11 @@ pub fn page_free(p: *PageInfo) void {
 pub fn page_decref(p: *PageInfo) void {
     assert(p.ref_count > 0);
     p.ref_count -= 1;
-    if (p.ref_count == 0)
+    if (p.ref_count == 0) {
         page_free(p);
+    } else {
+        log("not freed: {x}\n", .{page2pa(p)});
+    }
 }
 
 // Given 'pgdir', a pointer to a page directory, pgdir_walk returns
@@ -237,9 +243,9 @@ pub fn page_decref(p: *PageInfo) void {
 //
 // Hint 3: look at inc/mmu.h for useful macros that mainipulate page
 // table and page directory entries.
-pub fn walk(tt: *align(page_size) volatile Tt, va: *allowzero u8, create: bool) Error!?*TtEntry {
+pub fn walk(tt: *align(page_size) volatile Tt, va: usize, create: bool) Error!?*TtEntry {
     // log("va: {}\n", .{va});
-    var l1_tte = &tt[l1x(@ptrToInt(va))];
+    var l1_tte = &tt[l1x(va)];
     // log("walk: {x} {x} {x}\n", .{ va, l1x(@ptrToInt(va)), l2x(@ptrToInt(va)) });
     if ((l1_tte.* >> tte_valid_off) & 0x1 == 0) {
         if (!create)
@@ -252,6 +258,7 @@ pub fn walk(tt: *align(page_size) volatile Tt, va: *allowzero u8, create: bool) 
         l1_tte.* = page2pa(pp);
         l1_tte.* |= (1 << tte_valid_off);
         l1_tte.* |= (1 << tte_walk_off);
+        l1_tte.* |= (1 << tte_af_off);
         l1_tte.* |= (tte_ap_el1_rw_el0_rw << tte_ap_off);
         // l1_tte.* = TtEntry{
         // .valid = 1,
@@ -262,7 +269,7 @@ pub fn walk(tt: *align(page_size) volatile Tt, va: *allowzero u8, create: bool) 
     // log("l1x: {}, l1_tte: {x}\n", .{ l1x(@ptrToInt(va)), l1_tte.* });
 
     var l2_tt = @intToPtr(*Tt, kern_addr(tte_paddr(l1_tte.*)));
-    var l2_tte = &l2_tt[l2x(@ptrToInt(va))];
+    var l2_tte = &l2_tt[l2x(va)];
     if ((l2_tte.* >> tte_valid_off) & 0x1 == 0) {
         if (!create)
             return null;
@@ -274,6 +281,7 @@ pub fn walk(tt: *align(page_size) volatile Tt, va: *allowzero u8, create: bool) 
         l2_tte.* = page2pa(pp);
         l2_tte.* |= (1 << tte_valid_off);
         l2_tte.* |= (1 << tte_walk_off);
+        l2_tte.* |= (1 << tte_af_off);
         l2_tte.* |= (tte_ap_el1_rw_el0_rw << tte_ap_off);
         // l2_tte.* = 0;
         // @ptrCast(*u64, l2_tte).* |= 1 << tte_valid_off;
@@ -288,7 +296,7 @@ pub fn walk(tt: *align(page_size) volatile Tt, va: *allowzero u8, create: bool) 
     // log("l2x: {}, l2_tte: {x}\n", .{ l2x(@ptrToInt(va)), l2_tte.* });
 
     var l3_tt = @intToPtr(*Tt, kern_addr(tte_paddr(l2_tte.*)));
-    return &l3_tt[l3x(@ptrToInt(va))];
+    return &l3_tt[l3x(va)];
 }
 
 // Map [va, va+size) of virtual address space to physical [pa, pa+size)
@@ -308,7 +316,7 @@ fn boot_map_region(tt: *align(page_size) volatile Tt, va: usize, size: usize, pa
     var off: usize = 0;
     while (off < size) : (off += (1 << l3_off)) {
         // log("off: {}\n", .{off});
-        if (try walk(tt, @intToPtr(*u8, va + off), true)) |tte| {
+        if (try walk(tt, va + off, true)) |tte| {
             tte.* = pa + off;
             tte.* |= 1 << tte_valid_off;
             tte.* |= 1 << tte_walk_off;
@@ -415,12 +423,12 @@ pub fn boot_stack_top() usize {
 //
 // Hint: The TA solution is implemented using pgdir_walk, page_remove,
 // and page2pa.
-pub fn page_insert(tt: *align(page_size) volatile Tt, pp: *PageInfo, va: *allowzero u8, ap: u2) Error!void {
+pub fn page_insert(tt: *align(page_size) volatile Tt, pp: *PageInfo, va: usize, ap: u2) Error!void {
     var tte = (try walk(tt, va, true)).?;
     if (tte_paddr(tte.*) != page2pa(pp)) {
         pp.*.ref_count += 1;
         if ((tte.* >> tte_valid_off) & 0x1 == 1)
-            page_remove(tt, @intToPtr(*allowzero u8, tte_paddr(tte.*)));
+            page_remove(tt, tte_paddr(tte.*));
     }
 
     // log("page_insert: va: {}, pa: {x}\n",.{va, page2pa(pp)});
@@ -438,7 +446,7 @@ pub fn page_insert(tt: *align(page_size) volatile Tt, pp: *PageInfo, va: *allowz
 // but should not be used by most callers.
 //
 // Return NULL if there is no page mapped at va.
-pub fn page_lookup(tt: *align(page_size) volatile Tt, va: *allowzero u8, opt_tte_store: ?**TtEntry) ?*PageInfo {
+pub fn page_lookup(tt: *align(page_size) volatile Tt, va: usize, opt_tte_store: ?**TtEntry) ?*PageInfo {
     var opt_tte = walk(tt, va, false) catch unreachable;
     if (opt_tte) |tte| {
         if (opt_tte_store) |tte_store| tte_store.* = tte;
@@ -461,7 +469,7 @@ pub fn page_lookup(tt: *align(page_size) volatile Tt, va: *allowzero u8, opt_tte
 //
 // Hint: The TA solution is implemented using page_lookup,
 // 	tlb_invalidate, and page_decref.
-pub fn page_remove(tt: *align(page_size) volatile Tt, va: *allowzero u8) void {
+pub fn page_remove(tt: *align(page_size) volatile Tt, va: usize) void {
     var tte: *TtEntry = undefined;
     if (page_lookup(tt, va, &tte)) |pp| {
         tte.* = 0;
@@ -473,11 +481,11 @@ pub fn page_remove(tt: *align(page_size) volatile Tt, va: *allowzero u8) void {
 pub fn region_alloc(tt: *align(page_size) volatile Tt, src_va: usize, len: usize, ap: u2) Error!void {
     var va = src_va;
     while (round_down(va, page_size) < round_up(src_va + len, page_size)) : (va += (1 << l3_off)) {
-        if (page_lookup(tt, @intToPtr(*allowzero u8, va), null) != null)
+        if (page_lookup(tt, va, null) != null)
             continue;
         const pp = try page_alloc(false);
         errdefer page_free(pp);
-        _ = try page_insert(tt, pp, @intToPtr(*allowzero u8, va), ap);
+        _ = try page_insert(tt, pp, va, ap);
     }
 }
 
@@ -487,7 +495,7 @@ pub fn user_memcpy(tt: *align(page_size) volatile Tt, dst_va_: usize, len: usize
     var page_start = dst_va % page_size;
     var osrc: usize = 0;
     while (osrc < len) {
-        if (page_lookup(tt, @intToPtr(*allowzero u8, dst_va), null)) |pp| {
+        if (page_lookup(tt, dst_va, null)) |pp| {
             const kva = @intToPtr([*]u8, @ptrToInt(page2kva(pp)));
             const l = std.math.min(len - osrc, page_size - page_start);
             std.mem.copy(u8, kva[page_start .. page_start + l], src[osrc .. osrc + l]);
@@ -503,7 +511,7 @@ pub fn user_memzero(tt: *align(page_size) volatile Tt, dst_va: usize, len: usize
     var page_start = dst_va % page_size;
     var off: usize = 0;
     while (off < len) {
-        if (page_lookup(tt, @intToPtr(*allowzero u8, dst), null)) |pp| {
+        if (page_lookup(tt, dst, null)) |pp| {
             const kva = @ptrCast([*]u8, page2kva(pp));
             const l = std.math.min(len - off, page_size - page_start);
             for (kva[page_start .. page_start + l]) |*p| p.* = 0;
@@ -516,7 +524,7 @@ pub fn user_memzero(tt: *align(page_size) volatile Tt, dst_va: usize, len: usize
     }
 }
 
-fn tlb_invalidate(tt: *align(page_size) volatile Tt, va: *allowzero u8) void {
+fn tlb_invalidate(tt: *align(page_size) volatile Tt, va: usize) void {
     asm volatile (
         \\  TLBI     VMALLE1
         \\  DSB      SY
@@ -572,7 +580,7 @@ pub fn l2x(va: usize) u9 {
 
 pub const l3_off = page_bits;
 
-fn l3x(va: usize) u9 {
+pub fn l3x(va: usize) u9 {
     return @truncate(u9, va >> l3_off);
 }
 

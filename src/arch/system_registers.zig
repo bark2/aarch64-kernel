@@ -168,3 +168,9 @@ pub inline fn ID_AA64MMFR1_EL1() u64 {
         : [ret] "=r" (-> u64)
     );
 }
+
+pub inline fn far_el1() u64 {
+    return asm ("mrs %[res], far_el1"
+        : [res] "=r" (-> u64)
+    );
+}

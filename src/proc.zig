@@ -20,7 +20,7 @@ pub const ProcState = enum {
     NOT_RUNNABLE,
 };
 
-const Context = struct {
+const Context = packed struct {
     xs: [10]usize,
     fp: usize,
     sp: usize,
@@ -29,10 +29,10 @@ const Context = struct {
 
 const Proc = struct {
     const Self = @This();
+    ef: exception.ExceptionFrame,
     next: ?*Proc,
     pid: usize,
     tt: *align(pmap.page_size) volatile pmap.Tt,
-    ef: exception.ExceptionFrame,
     state: ProcState,
 
     fn init(self: *Self, pid: usize) Error!void {
@@ -58,39 +58,33 @@ const Proc = struct {
                 .elr = 0,
                 .spsr = spsr,
             },
-            .state = ProcState.RUNNABLE,
+            .state = ProcState.NOT_RUNNABLE,
         };
     }
 
     pub fn deinit(self: *Self) void {
+        log("deinit: sp page: {x}\n", .{pmap.page2pa(pmap.page_lookup(self.tt, self.ef.sp, null).?)});
         const Ttp = *align(pmap.page_size) volatile pmap.Tt;
         const tt2 = @intToPtr(Ttp, pmap.kern_addr(pmap.tte_paddr(self.tt[0])));
         for (tt2) |tte2, itte2| {
             if ((tte2 & (1 << pmap.tte_valid_off)) != 1)
                 continue;
 
-            const pa2 = pmap.tte_paddr(tte2);
+            const pa3 = pmap.tte_paddr(tte2);
             // log("tte2: {x}, {x}\n", .{ tte2, ((tte2 >> 12) & ((1 << 36) - 1)) << 12 });
-            const tt3 = @intToPtr(Ttp, pmap.kern_addr(pa2));
+            const tt3 = @intToPtr(Ttp, pmap.kern_addr(pa3));
             for (tt3) |tte3, itte3| {
-                if ((tte3 & (1 << pmap.tte_valid_off)) == 1) {
-                    const pa3 = pmap.tte_paddr(tte3);
-                    const va = @intToPtr(*allowzero u8, pmap.gen_laddr(0, itte2, itte3));
-                    log("[{}][{}]: va: {}, pa: {x}\n", .{ itte2, itte3, va, pa3 });
-                    const p3 = pmap.pa2page(pa3);
-                    if (p3.ref_count > 0)
-                        pmap.page_decref(p3);
-                    tt3[itte3] = 0;
-                    // pmap.page_remove(self.tt, va);
+                if (get_bits(tte3, pmap.tte_valid_off, pmap.tte_valid_len) == pmap.tte_valid_valid) {
+                    log("trying to remove: [{}][{}]: {x}, pa: {x}\n", .{ itte2, itte3, pmap.gen_laddr(0, itte2, itte3), pmap.page2pa(pmap.page_lookup(self.tt, pmap.gen_laddr(0, itte2, itte3), null).?) });
+                    pmap.page_remove(self.tt, pmap.gen_laddr(0, itte2, itte3));
                 }
             }
 
-            // log("page_decref(2): {x}\n", .{pa2});
-            pmap.page_remove(self.tt, @ptrCast(*allowzero u8, tt2));
+            pmap.page_remove(pmap.kern_tt, pmap.kern_addr(pa3));
         }
 
-        pmap.page_remove(self.tt, @ptrCast(*allowzero u8, tt2));
-        pmap.page_decref(pmap.pa2page(pmap.phys_addr(@ptrToInt(self.tt))));
+        pmap.page_remove(pmap.kern_tt, pmap.kern_addr(pmap.tte_paddr(self.tt[0])));
+        pmap.page_remove(pmap.kern_tt, @ptrToInt(self.tt));
     }
 
     pub fn load_elf(self: *Self) !void {
@@ -132,45 +126,34 @@ const Proc = struct {
     }
 
     fn init_virtual_memory(self: *Self) !void {
-        const vtta = (1 << 30) - pmap.page_size;
+        const Ttp = *align(pmap.page_size) volatile pmap.Tt;
         const all_read_base_entry = (1 << pmap.tte_valid_off) |
             (1 << pmap.tte_walk_off) |
             (1 << pmap.tte_af_off) |
             (@intCast(u64, pmap.tte_ap_el1_r_el0_r) << pmap.tte_ap_off);
 
-        const l2_tt_pa = pmap.tte_paddr(self.tt[0]);
-        const l2_tt = @intToPtr(*volatile pmap.Tt, pmap.kern_addr(l2_tt_pa));
-        l2_tt[pmap.tt_entries - 1] = l2_tt_pa | all_read_base_entry;
-        log("l2_tt_pa: {x}\n", .{l2_tt_pa});
+        self.tt[pmap.tt_entries - 1] = pmap.phys_addr(@ptrToInt(self.tt)) | all_read_base_entry;
 
         // initialize user stack
-        const sp_top = (1 << 30) - pmap.page_size;
+        const sp_top = (1 << 30);
         try pmap.region_alloc(self.tt, sp_top - pmap.page_size, pmap.page_size, pmap.tte_ap_el1_rw_el0_rw);
         self.ef.sp = sp_top;
 
-        for (l2_tt) |tte, i| {
-            if (i == pmap.tt_entries - 1)
-                continue;
-            if (get_bits(tte, pmap.tte_valid_off, pmap.tte_valid_len) == pmap.tte_valid_valid) {
-                const l3_tt = @intToPtr(*volatile pmap.Tt, pmap.kern_addr(pmap.tte_paddr(tte)));
-                for (l3_tt) |tte3, j| {
-                    if (get_bits(tte3, pmap.tte_valid_off, pmap.tte_valid_len) == pmap.tte_valid_valid)
-                        log("{}[{}]: {b}, 0x{x}\n", .{ i, j, tte3, pmap.tte_paddr(tte3) });
-                }
-            }
-        }
-
-        // const tte = @intToPtr(*volatile pmap.Tt, pmap.kern_addr(pmap.tte_paddr(l2_tt[510])))[346];
-        // if (get_bits(tte, pmap.tte_valid_off, pmap.tte_valid_len) == pmap.tte_valid_valid)
-        // log("{b}, 0x{x}\n", .{ tte, pmap.tte_paddr(tte) });
-        var tte: *pmap.TtEntry = undefined;
-        var pp = pmap.page_lookup(self.tt, @intToPtr(*allowzero u8, 0x3fe00000), &tte);
-        log("tte: {x} {}\n", .{ pmap.tte_paddr(tte.*), (tte.* >> pmap.tte_ap_off) & 3 });
+        // for (@intToPtr(Ttp, pmap.kern_addr(pmap.tte_paddr(self.tt[0])))) |tte, i| {
+        //     if (get_bits(tte, pmap.tte_valid_off, pmap.tte_valid_len) == pmap.tte_valid_valid) {
+        //         log("[{}]: 0x{x}\n", .{ i, pmap.tte_paddr(tte) });
+        //         const l3_tt = @intToPtr(*volatile pmap.Tt, pmap.kern_addr(pmap.tte_paddr(tte)));
+        //         for (l3_tt) |tte3, j| {
+        //             if (get_bits(tte3, pmap.tte_valid_off, pmap.tte_valid_len) == pmap.tte_valid_valid)
+        //                 log("{}[{}]: {b}, 0x{x}\n", .{ i, j, tte3, pmap.tte_paddr(tte3) });
+        //         }
+        //     }
+        // }
     }
 };
 
 pub var pid_count: usize = undefined;
-pub var cur_proc: ?*Proc = undefined;
+pub export var cur_proc: ?*Proc = undefined;
 var all_procs: []Proc = undefined;
 pub var procs: ?*Proc = undefined;
 
@@ -203,6 +186,7 @@ pub fn create() !*Proc {
     assert(p.ef.elr % @alignOf(elf.Elf) == 0);
     try p.load_elf();
     try p.init_virtual_memory();
+    p.state = ProcState.RUNNABLE;
     return p;
 }
 
@@ -261,6 +245,12 @@ fn switch_context(prev: *Context, next: *Context) noreturn {
         : [prev] "x0" (prev),
           [next] "x1" (next)
     );
+}
+
+pub fn page_owners(pp: *pmap.PageInfo) void {
+    if (procs == null) return;
+
+    var p = procs;
 }
 
 pub fn schedule() noreturn {
