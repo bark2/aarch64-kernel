@@ -63,7 +63,6 @@ const Proc = struct {
     }
 
     pub fn deinit(self: *Self) void {
-        log("deinit: sp page: {x}\n", .{pmap.page2pa(pmap.page_lookup(self.tt, self.ef.sp, null).?)});
         const Ttp = *align(pmap.page_size) volatile pmap.Tt;
         const tt2 = @intToPtr(Ttp, pmap.kern_addr(pmap.tte_paddr(self.tt[0])));
         for (tt2) |tte2, itte2| {
@@ -74,17 +73,17 @@ const Proc = struct {
             // log("tte2: {x}, {x}\n", .{ tte2, ((tte2 >> 12) & ((1 << 36) - 1)) << 12 });
             const tt3 = @intToPtr(Ttp, pmap.kern_addr(pa3));
             for (tt3) |tte3, itte3| {
-                if (get_bits(tte3, pmap.tte_valid_off, pmap.tte_valid_len) == pmap.tte_valid_valid) {
-                    log("trying to remove: [{}][{}]: {x}, pa: {x}\n", .{ itte2, itte3, pmap.gen_laddr(0, itte2, itte3), pmap.page2pa(pmap.page_lookup(self.tt, pmap.gen_laddr(0, itte2, itte3), null).?) });
+                if (tte3 & pmap.tte_valid_mask == pmap.tte_valid_valid) {
+                    // log("trying to remove: [{}][{}]: {x}, pa: {x}\n", .{ itte2, itte3, pmap.gen_laddr(0, itte2, itte3), pmap.page2pa(pmap.page_lookup(self.tt, pmap.gen_laddr(0, itte2, itte3), null).?) });
                     pmap.page_remove(self.tt, pmap.gen_laddr(0, itte2, itte3));
                 }
             }
 
-            pmap.page_remove(pmap.kern_tt, pmap.kern_addr(pa3));
+            pmap.page_decref(pmap.pa2page(pa3));
         }
 
-        pmap.page_remove(pmap.kern_tt, pmap.kern_addr(pmap.tte_paddr(self.tt[0])));
-        pmap.page_remove(pmap.kern_tt, @ptrToInt(self.tt));
+        pmap.page_decref(pmap.pa2page(pmap.tte_paddr(self.tt[0])));
+        pmap.page_decref(pmap.pa2page(pmap.phys_addr(@ptrToInt(self.tt))));
     }
 
     pub fn load_elf(self: *Self) !void {
@@ -127,12 +126,8 @@ const Proc = struct {
 
     fn init_virtual_memory(self: *Self) !void {
         const Ttp = *align(pmap.page_size) volatile pmap.Tt;
-        const all_read_base_entry = (1 << pmap.tte_valid_off) |
-            (1 << pmap.tte_walk_off) |
-            (1 << pmap.tte_af_off) |
-            (@intCast(u64, pmap.tte_ap_el1_r_el0_r) << pmap.tte_ap_off);
 
-        self.tt[pmap.tt_entries - 1] = pmap.phys_addr(@ptrToInt(self.tt)) | all_read_base_entry;
+        self.tt[pmap.tt_entries - 1] = pmap.phys_addr(@ptrToInt(self.tt)) | pmap.tte_read_only;
 
         // initialize user stack
         const sp_top = (1 << 30);
@@ -196,14 +191,20 @@ pub fn find(pid: usize) ?*Proc {
     return ip;
 }
 
-pub fn destory(pid: usize) !void {
-    if (find(pid)) |p| {
-        p.deinit();
-        if (cur_proc == p)
-            cur_proc = null;
+pub fn destory(p: *Proc) void {
+    var ip = procs;
+    if (ip.?.pid != p.pid) {
+        while (ip.?.next != null and ip.?.next.?.pid != p.pid) : (ip = ip.?.next) {}
+        ip.?.next = ip.?.next.?.next;
     } else {
-        return Error.NotFound;
+        procs = procs.?.next;
     }
+
+    if (cur_proc == p)
+        cur_proc = null;
+
+    p.deinit();
+    allocator.destroy(p);
 }
 
 pub fn run(p: *Proc) noreturn {
@@ -254,7 +255,7 @@ pub fn page_owners(pp: *pmap.PageInfo) void {
 }
 
 pub fn schedule() noreturn {
-    var idle = if (cur_proc == null) procs else cur_proc.?;
+    var idle = if (cur_proc == null) procs else if (cur_proc.?.next == null) procs else cur_proc.?.next;
     while ((cur_proc != null and idle != cur_proc) or (cur_proc == null and idle != null)) {
         if (idle.?.state == ProcState.RUNNABLE)
             run(idle.?);

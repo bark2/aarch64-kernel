@@ -22,48 +22,82 @@ fn get_l3tt(i: usize) *volatile pmap.Tt {
     return @intToPtr(*volatile pmap.Tt, il1 | il2 | il3);
 }
 
+fn duppage(dstpid: usize, va: usize, flags: usize) !void {
+    const cow_pte = (1 << pmap.tte_valid_off) |
+        (1 << pmap.tte_walk_off) |
+        (1 << pmap.tte_af_off) |
+        (@intCast(u64, pmap.tte_ap_el1_r_el0_r)) |
+        @intCast(u64, pmap.tte_cow);
+
+    if (flags & pmap.tte_ap_mask == pmap.tte_ap_el1_r_el0_r) {
+        _ = try syscall.syscall5(
+            @enumToInt(syscall.syscall.Syscall.PAGE_MAP),
+            0,
+            va,
+            dstpid,
+            va,
+            flags,
+        );
+    } else {
+        const read_flags = (flags - (flags & pmap.tte_ap_mask)) | pmap.tte_ap_el1_r_el0_r;
+        _ = try syscall.syscall5(
+            @enumToInt(syscall.syscall.Syscall.PAGE_MAP),
+            0,
+            va,
+            dstpid,
+            va,
+            read_flags | cow_pte,
+        );
+        _ = try syscall.syscall5(
+            @enumToInt(syscall.syscall.Syscall.PAGE_MAP),
+            0,
+            va,
+            dstpid,
+            va,
+            read_flags | cow_pte,
+        );
+    }
+}
+
 pub fn fork() !usize {
     // create a new process
     // duplicate the current running process virtual memory, TODO: COW
     // allocate a new page for its stack then set its state to RUNNABLE
-    const child = try syscall.syscall0(@enumToInt(syscall.syscall.Syscall.PROC_ALLOC));
-    if (child == 0)
+    const child = syscall.syscall0(@enumToInt(syscall.syscall.Syscall.PROC_FORK));
+    if (child == 0) {
         return 0;
-
-    for (get_l2tt()) |l2tte, il3| {
-        const ap = get_bits(l2tte, pmap.tte_ap_off, pmap.tte_ap_len);
-        if (get_bits(l2tte, pmap.tte_valid_off, pmap.tte_valid_len) == pmap.tte_valid_valid and
-            get_bits(l2tte, pmap.tte_ap_off, pmap.tte_ap_len) == pmap.tte_ap_el1_rw_el0_rw)
-        {
-            for (get_l3tt(il3)) |pte, ip| {
-                if (get_bits(pte, pmap.tte_valid_off, pmap.tte_valid_len) == pmap.tte_valid_valid and
-                    get_bits(pte, pmap.tte_ap_off, pmap.tte_ap_len) == pmap.tte_ap_el1_rw_el0_rw)
-                {
-                    const va = pmap.gen_laddr(0, il3, ip);
-                    _ = try syscall.syscall5(
-                        @enumToInt(syscall.syscall.Syscall.PAGE_MAP),
-                        0,
-                        va,
-                        child,
-                        va,
-                        pmap.tte_ap_el1_rw_el0_rw << pmap.tte_ap_off,
-                    );
+    } else {
+        for (get_l2tt()) |l2tte, il3| {
+            const ap = get_bits(l2tte, pmap.tte_ap_off, pmap.tte_ap_len);
+            if (get_bits(l2tte, pmap.tte_valid_off, pmap.tte_valid_len) == pmap.tte_valid_valid) {
+                for (get_l3tt(il3)) |pte, ip| {
+                    if (get_bits(pte, pmap.tte_valid_off, pmap.tte_valid_len) == pmap.tte_valid_valid) {
+                        const va = pmap.gen_laddr(0, il3, ip);
+                        const flags = pte - pmap.tte_paddr(pte);
+                        _ = try duppage(child, va, flags);
+                    }
                 }
             }
         }
+        _ = try syscall.syscall2(
+            @enumToInt(syscall.syscall.Syscall.PROC_SET_STATE),
+            child,
+            @enumToInt(proc.ProcState.RUNNABLE),
+        );
+
+        return child;
     }
+}
 
-    _ = try syscall.syscall3(
-        @enumToInt(syscall.syscall.Syscall.PAGE_ALLOC),
-        child,
-        (1 << 30) - pmap.page_size,
-        pmap.tte_ap_el1_rw_el0_rw << pmap.tte_ap_off,
-    );
-    _ = try syscall.syscall2(
-        @enumToInt(syscall.syscall.Syscall.PROC_SET_STATE),
-        child,
-        @enumToInt(proc.ProcState.RUNNABLE),
-    );
-
-    return 0;
+pub fn kernel_space_fork() !usize {
+    const child = try syscall.syscall0(@enumToInt(syscall.syscall.Syscall.PROC_FORK));
+    if (child != 0) {
+        _ = try syscall.syscall2(
+            @enumToInt(syscall.syscall.Syscall.PROC_SET_STATE),
+            child,
+            @enumToInt(proc.ProcState.RUNNABLE),
+        );
+        _ = try syscall.syscall0(@enumToInt(syscall.syscall.Syscall.YIELD));
+    }
+    return child;
 }

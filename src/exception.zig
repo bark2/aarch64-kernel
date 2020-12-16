@@ -85,7 +85,7 @@ pub export fn handler(exception_: usize, ef: *ExceptionFrame) noreturn {
     }
 }
 
-fn log_ef(exception: Exception, ef: *ExceptionFrame) void {
+fn log_ef(exception: Exception, ef: ExceptionFrame) void {
     log("\n{}\n", .{exception_names[@enumToInt(exception)]});
     const currentEL = asm volatile ("mrs x0, CurrentEL"
         : [ret] "=r" (-> usize)
@@ -120,18 +120,24 @@ fn dispatch(exception: Exception, ef: *ExceptionFrame) void {
             // pop_ef(0);
         },
         Exception.SYNC_EL0_64 => {
-            if ((arch.esr_el1() >> arch.ESR_ELx_EC_SHIFT) == arch.ESR_ELx_EC_SVC64) { // caused by an svc inst
+            const esr = arch.esr_el1();
+            if ((esr >> arch.ESR_ELx_EC_SHIFT) == arch.ESR_ELx_EC_SVC64) { // SVC instruction
+                log("pid: {}, {}\n", .{
+                    proc.cur_proc.?.pid,
+                    @intToEnum(syscall.Syscall, @truncate(u3, proc.cur_proc.?.ef.xs[8])),
+                });
+
                 ef.xs[0] = @intCast(usize, syscall.syscall(ef.xs[8], ef.xs[0..8].*));
+            } else if ((esr >> arch.ESR_ELx_EC_SHIFT) == arch.ESR_ELx_EC_DABT_LOW) { // Data Abort from a lower Exception level
+                if (user_memory_fault_handler() == false) proc.destory(proc.cur_proc.?);
             } else {
-                log_ef(exception, ef);
-                log("Execution is now stopped in exception handler\n", .{});
-                while (true) {
-                    asm volatile ("wfe");
-                }
+                log_ef(exception, ef.*);
+                log("Unexpected el0 excpetion, killing process {}\n", .{proc.cur_proc.?.pid});
+                proc.destory(proc.cur_proc.?);
             }
         },
         else => {
-            log_ef(exception, ef);
+            log_ef(exception, ef.*);
             log("Execution is now stopped in exception handler\n", .{});
             while (true) {
                 asm volatile ("wfe");
@@ -140,7 +146,53 @@ fn dispatch(exception: Exception, ef: *ExceptionFrame) void {
     }
 }
 
-// export var REGISTERS_SIZE: u12 = 272;
+const MemoryFaultType = enum {
+    ADDRESS_SIZE_FAULT,
+    TRANSLATION_FAULT,
+    ACCESS_FLAG_FAULT,
+    PERMISSION_FAULT,
+};
+
+fn user_memory_fault_handler() bool {
+    log("user_memory_fault_handler() pid: {}, far: 0x{x}\n", .{proc.cur_proc.?.pid, arch.far_el1()});
+    const data_fault_status_code = arch.esr_el1() & ((1 << 6) - 1);
+    const data_fault_status_code_type = data_fault_status_code >> 4;
+    if (data_fault_status_code_type != 0)
+        panic("", null);
+
+    const memory_fault_type = @intToEnum(MemoryFaultType, @truncate(u2, data_fault_status_code >> 2));
+    const memory_fault_level = @truncate(u2, data_fault_status_code);
+    const tt = proc.cur_proc.?.tt;
+    switch (memory_fault_type) {
+        MemoryFaultType.PERMISSION_FAULT => blk: {
+            var pte: *pmap.TtEntry = undefined;
+            var srcpp = pmap.page_lookup(tt, arch.far_el1(), &pte).?;
+            if (pte.* & pmap.tte_cow_mask != pmap.tte_cow)
+                break :blk;
+
+            var dstpp = srcpp;
+            if (srcpp.ref_count > 1) {
+                dstpp = pmap.page_alloc(false) catch return false;
+                errdefer pmap.page_decref(dstpp);
+
+                const srcva = pmap.page2kva(srcpp);
+                const dstva = pmap.page2kva(dstpp);
+                std.mem.copy(u8, dstva[0..pmap.page_size], srcva[0..pmap.page_size]);
+            }
+            pmap.page_insert(
+                tt,
+                dstpp,
+                pmap.round_down(arch.far_el1(), pmap.page_size),
+                pmap.tte_ap_el1_rw_el0_rw,
+            ) catch return false;
+
+            return true;
+        },
+        else => return false,
+    }
+
+    return false;
+}
 
 // push registers on to the kernel stack
 //   el: indicates which exception level an exception is taken from

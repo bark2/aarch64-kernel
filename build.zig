@@ -6,6 +6,7 @@ const builtin = @import("builtin");
 // llvm-objdump zig-cache/kernel.aarch64.bin --section=.text -dl -h | less
 pub fn build(b: *Builder) !void {
     const mode = b.standardReleaseOptions();
+    // const mode = builtin.Mode.ReleaseSmall;
     const arch = std.zig.CrossTarget{
         .cpu_arch = .aarch64,
         .os_tag = .freestanding,

@@ -22,6 +22,3 @@ pub fn panic(message: []const u8, trace: ?*builtin.StackTrace) noreturn {
     unreachable;
 }
 
-pub fn get_bits(val: usize, comptime off: usize, comptime len: usize) usize {
-    return (val >> off) & ((1 << len) - 1);
-}

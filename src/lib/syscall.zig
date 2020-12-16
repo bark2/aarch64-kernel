@@ -7,7 +7,11 @@ pub fn syscall0(number: usize) !usize {
         : [res] "={x0}" (-> isize)
         : [number] "{x8}" (number)
     );
-    return if (res < 0) @intToError(@intCast(u16, -1 * res)) else return @intCast(usize, res);
+    if (res < 0) {
+        return @intToError(@intCast(u16, -1 * res));
+    } else {
+        return @intCast(usize, res);
+    }
 }
 
 pub fn syscall1(number: usize, arg1: usize) !usize {

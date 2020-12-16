@@ -6,9 +6,9 @@ const rtt_addr = (1 << 32) - page_size;
 
 export fn main() usize {
     print("hello from user\n", .{});
-    _ = fork() catch unreachable;
+    const pid = kernel_space_fork() catch unreachable;
     const self_pid = syscall0(@enumToInt(syscall.Syscall.PROC_PID)) catch unreachable;
-    print("exiting: {}...\n", .{self_pid});
+    print("fork got {}, self_pid: {}\n", .{ pid, self_pid });
     _ = syscall1(@enumToInt(syscall.Syscall.KILL), 0) catch unreachable;
 
     return 0;
