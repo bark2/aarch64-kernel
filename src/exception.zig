@@ -109,7 +109,6 @@ fn log_ef(exception: Exception, ef: ExceptionFrame) void {
     log("far_el1 {x}, l1:{}, l2:{}, l3:{}\n", .{ far, pmap.l1x(far), pmap.l2x(far), pmap.l3x(far) });
 }
 
-// TODO: include https://elixir.bootlin.com/linux/v4.9.120/source/arch/arm64/include/asm/esr.h
 fn dispatch(exception: Exception, ef: *ExceptionFrame) void {
     switch (exception) {
         // {exception type}_{taken from exception level}
@@ -122,10 +121,10 @@ fn dispatch(exception: Exception, ef: *ExceptionFrame) void {
         Exception.SYNC_EL0_64 => {
             const esr = arch.esr_el1();
             if ((esr >> arch.ESR_ELx_EC_SHIFT) == arch.ESR_ELx_EC_SVC64) { // SVC instruction
-                log("pid: {}, {}\n", .{
-                    proc.cur_proc.?.pid,
-                    @intToEnum(syscall.Syscall, @truncate(u3, proc.cur_proc.?.ef.xs[8])),
-                });
+                // log("\npid: {}, {}\n", .{
+                //     proc.cur_proc.?.pid,
+                //     @intToEnum(syscall.Syscall, @truncate(u3, proc.cur_proc.?.ef.xs[8])),
+                // });
 
                 ef.xs[0] = @intCast(usize, syscall.syscall(ef.xs[8], ef.xs[0..8].*));
             } else if ((esr >> arch.ESR_ELx_EC_SHIFT) == arch.ESR_ELx_EC_DABT_LOW) { // Data Abort from a lower Exception level
@@ -154,7 +153,7 @@ const MemoryFaultType = enum {
 };
 
 fn user_memory_fault_handler() bool {
-    log("user_memory_fault_handler() pid: {}, far: 0x{x}\n", .{proc.cur_proc.?.pid, arch.far_el1()});
+    // log("user_memory_fault_handler() pid: {}, far: 0x{x}\n", .{ proc.cur_proc.?.pid, arch.far_el1() });
     const data_fault_status_code = arch.esr_el1() & ((1 << 6) - 1);
     const data_fault_status_code_type = data_fault_status_code >> 4;
     if (data_fault_status_code_type != 0)
@@ -179,16 +178,15 @@ fn user_memory_fault_handler() bool {
                 const dstva = pmap.page2kva(dstpp);
                 std.mem.copy(u8, dstva[0..pmap.page_size], srcva[0..pmap.page_size]);
             }
-            pmap.page_insert(
-                tt,
-                dstpp,
-                pmap.round_down(arch.far_el1(), pmap.page_size),
-                pmap.tte_ap_el1_rw_el0_rw,
-            ) catch return false;
+
+            pmap.page_insert(tt, dstpp, pmap.round_down(arch.far_el1(), pmap.page_size), pmap.tte_ap_el1_rw_el0_rw) catch return false;
 
             return true;
         },
-        else => return false,
+        else => {
+            log("unsupported user memory fault: {}, destroying procces: {}\n", .{ memory_fault_type, proc.cur_proc.?.pid });
+            return false;
+        },
     }
 
     return false;

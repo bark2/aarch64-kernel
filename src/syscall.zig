@@ -45,6 +45,12 @@ fn puts(s: usize, len: usize) void {
 
 fn yield() void {
     proc.cur_proc.?.state = proc.ProcState.RUNNABLE;
+    // log("sys.yield(): sp: 0x{x} : {x}\n", .{ proc.cur_proc.?.ef.sp, @intToPtr(*u8, proc.cur_proc.?.ef.sp).* });
+    var xsp: u8 = 255;
+    if (pmap.page_lookup(proc.cur_proc.?.tt, proc.cur_proc.?.ef.sp, null)) |pp| {
+        xsp = pmap.page2kva(pp)[0];
+    }
+    // log("proc.run(): sp: 0x{x} : {x}\n", .{ proc.cur_proc.?.ef.sp, xsp });
 }
 
 fn proc_fork() !usize {
@@ -62,6 +68,7 @@ fn proc_fork() !usize {
                     const va = pmap.gen_laddr(0, il2, il3);
                     const flags = pte - pmap.tte_paddr(pte);
                     const srcpp = pmap.pa2page(pmap.tte_paddr(pte));
+
                     if (pte & pmap.tte_ap_mask == pmap.tte_ap_el1_r_el0_r) {
                         try pmap.page_insert(p.tt, srcpp, va, pmap.tte_ap_el1_r_el0_r);
                     } else if (pte & pmap.tte_ap_mask == pmap.tte_ap_el1_rw_el0_rw) {

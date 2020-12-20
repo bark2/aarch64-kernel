@@ -150,7 +150,7 @@ const Proc = struct {
 pub var pid_count: usize = undefined;
 pub export var cur_proc: ?*Proc = undefined;
 var all_procs: []Proc = undefined;
-pub var procs: ?*Proc = undefined;
+pub var procs: ?*Proc = undefined; // TODO: use std.TailQueue
 
 var fixed: std.heap.FixedBufferAllocator = undefined;
 var allocator: *Allocator = undefined;
@@ -217,6 +217,13 @@ pub fn run(p: *Proc) noreturn {
     cur_proc = p;
     cur_proc.?.state = ProcState.RUNNING;
     arch.set_ttbr0_el1(pmap.phys_addr(@ptrToInt(p.tt)));
+    var xsp :u8 = 255;
+    if (pmap.page_lookup(cur_proc.?.tt, cur_proc.?.ef.sp, null)) |pp| {
+        xsp = pmap.page2kva(pp)[0];
+    }
+    
+    // log("proc.run(): x0:{x}, sp: 0x{x} : {x}\n", .{ cur_proc.?.ef.xs[0],cur_proc.?.ef.sp, xsp});
+
     exception.pop_ef(0, &cur_proc.?.ef);
 }
 

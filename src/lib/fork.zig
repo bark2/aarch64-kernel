@@ -64,9 +64,7 @@ pub fn fork() !usize {
     // duplicate the current running process virtual memory, TODO: COW
     // allocate a new page for its stack then set its state to RUNNABLE
     const child = syscall.syscall0(@enumToInt(syscall.syscall.Syscall.PROC_FORK));
-    if (child == 0) {
-        return 0;
-    } else {
+    if (child != 0) {
         for (get_l2tt()) |l2tte, il3| {
             const ap = get_bits(l2tte, pmap.tte_ap_off, pmap.tte_ap_len);
             if (get_bits(l2tte, pmap.tte_valid_off, pmap.tte_valid_len) == pmap.tte_valid_valid) {
@@ -84,20 +82,25 @@ pub fn fork() !usize {
             child,
             @enumToInt(proc.ProcState.RUNNABLE),
         );
-
-        return child;
     }
+    return child;
 }
 
 pub fn kernel_space_fork() !usize {
-    const child = try syscall.syscall0(@enumToInt(syscall.syscall.Syscall.PROC_FORK));
+    // try syscall.syscall0(@enumToInt(syscall.syscall.Syscall.PROC_FORK));
+    const number = @enumToInt(syscall.syscall.Syscall.PROC_FORK);
+    const child = asm volatile (
+        \\ svc #0
+        : [res] "={x0}" (-> usize)
+        : [number] "{x8}" (number)
+    );
     if (child != 0) {
         _ = try syscall.syscall2(
             @enumToInt(syscall.syscall.Syscall.PROC_SET_STATE),
             child,
             @enumToInt(proc.ProcState.RUNNABLE),
         );
-        _ = try syscall.syscall0(@enumToInt(syscall.syscall.Syscall.YIELD));
+    // _ = syscall.syscall0(@enumToInt(syscall.syscall.Syscall.YIELD)) catch unreachable;
     }
     return child;
 }

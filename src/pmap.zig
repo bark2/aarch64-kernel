@@ -457,8 +457,13 @@ pub fn page_insert(tt: *align(page_size) volatile Tt, pp: *PageInfo, va: usize, 
     var tte = (try walk(tt, va, true)).?;
     if (tte_paddr(tte.*) != page2pa(pp)) {
         pp.*.ref_count += 1;
-        if ((tte.* >> tte_valid_off) & 0x1 == 1) {
-            log("page_insert: resulted in removing an old page {}, 0x{x} -> {}, 0x{x}\n", .{ page_lookup(tt, va, null).?, page2pa(page_lookup(tt, va, null).?), pp, page2pa(pp) });
+        if (tte.* & tte_valid_mask == tte_valid_valid) {
+            log("page_insert: resulted in removing an old page {}, 0x{x} -> {}, 0x{x}\n", .{
+                page_lookup(tt, va, null).?,
+                page2pa(page_lookup(tt, va, null).?),
+                pp,
+                page2pa(pp),
+            });
             page_remove(tt, va);
         }
     }
